@@ -5,16 +5,36 @@
 [![Platform: Windows](https://img.shields.io/badge/platform-Windows-0078D6.svg)]()
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](./CONTRIBUTING.md)
 
-A Claude Code **operations center** for Windows: a live grid of Claude terminals with a
-permanent task board on the side. Think *tmux + Terminator + Claude Code + task manager*.
-Launch instances into repos and worktrees, watch every account's usage live in each
+> A local-first **operations center for [Claude Code](https://docs.anthropic.com/en/docs/claude-code)** on Windows — a live grid of Claude terminals with per-account usage meters, a permanent task board, git-worktree launching, and zero-context-loss handover between accounts.
+
+Think *tmux + Terminator + Claude Code + task manager* in one native window. Launch
+instances into repos and worktrees, watch every account's rate-limit usage live in each
 terminal header, assign tasks (with linked markdown) straight into a running Claude, and
-hand work between accounts with zero context loss.
+hand work between accounts when one hits a limit — without losing a single message of
+context.
 
-Built with Tauri 2 (Rust) + React + SQLite + xterm.js/ConPTY. No Electron, no cloud,
-everything local.
+Built with **Tauri 2 (Rust) + React + SQLite + xterm.js/ConPTY**. No Electron, no cloud,
+no telemetry — everything stays on your machine.
 
-## Layout
+---
+
+## Contents
+
+- [What it looks like](#what-it-looks-like)
+- [Feature overview](#feature-overview)
+- [Install & build](#install--build-from-source)
+- [First run](#first-run)
+- [Features in depth](#features-in-depth)
+- [Keyboard shortcuts](#keyboard-shortcuts)
+- [Real usage vs. estimation](#real-usage-recommended)
+- [How usage estimation works](#how-usage-estimation-works-fallback-honest-version)
+- [Architecture](#architecture)
+- [Data & safety](#data--safety)
+- [Docs · Contributing · License](#docs)
+
+---
+
+## What it looks like
 
 ```
 ┌────┬──────────────────────────────┬─────────────┐
@@ -28,6 +48,25 @@ everything local.
 └────┴──────────────────────────────┴─────────────┘
  sidebar        auto-tiled grid          task board
 ```
+
+---
+
+## Feature overview
+
+| Area | What you get |
+|---|---|
+| 🖥️ **Terminal grid** | Auto-tiling grid of real Claude terminals (ConPTY + xterm.js) for 1, 2, 4, 6, 8+ instances. Maximize/restore panes; per-pane action menu. |
+| 📊 **Live usage meters** | Every terminal header shows that account's **5-hour %** and **weekly %** as mini meters — usage always visible, never behind a menu. |
+| 👥 **Multi-account** | Auto-discovers accounts from `~\.claude` + `~\.claude-accounts\*`; each instance runs under its own `CLAUDE_CONFIG_DIR`. |
+| 📋 **Task board** | Permanent, resizable panel. Quick-add tasks, drag `.md` files to link them, **Assign ▾** to inject a task into a running Claude. You control completion. |
+| 🔁 **Failover** | On a usage-limit message, copies the session transcript to another account and relaunches with `--resume` — zero context loss. |
+| 🧠 **Project memory** | Auto-maintained `.project-memory\*.md` (summary, architecture, decisions, todos, handover, session-log) folded into handovers. |
+| 🌿 **Worktrees** | Create / launch / remove git worktrees under `<repo>-worktrees\<branch>` straight from the UI. |
+| 💾 **Session recovery** | The grid is persisted (SQLite). After a crash/reboot, terminals reappear as **Resume** cells (`claude --continue`). |
+| ⌨️ **Keyboard-driven** | Ctrl+1…4 views, Ctrl+B sidebar, Ctrl+J task panel, Ctrl+N new instance. |
+| 🔌 **Real usage tap** | Optional, reversible tap into Claude Code's status line for **LIVE** rate-limit numbers with true reset countdowns. |
+
+---
 
 ## Install & build (from source)
 
@@ -64,46 +103,73 @@ Double-click `src-tauri\target\release\claude-commander.exe` (or pin it to the t
 npm run tauri dev            # hot-reloading dev build
 ```
 
+---
+
 ## First run
 
-1. Accounts are auto-discovered from `~\.claude` (shown as **Main**) and every folder in
-   `~\.claude-accounts\*` — the same config dirs your `cc`/`ccw` scripts use. Instances
+1. **Accounts** are auto-discovered from `~\.claude` (shown as **Main**) and every folder
+   in `~\.claude-accounts\*` — the same config dirs your `cc`/`ccw` scripts use. Instances
    launch with `CLAUDE_CONFIG_DIR` pointed at the chosen account.
-2. Usage history is parsed from each account's session transcripts on first scan
+2. **Usage history** is parsed from each account's session transcripts on first scan
    (~seconds). Numbers sharpen as budgets calibrate (see below).
-3. Add your repos in **Projects** (folder picker). Worktrees are created under
-   `<repo>-worktrees\<branch>` next to the repo.
+3. **Projects** — add your repos in the Projects view (folder picker). Worktrees are
+   created under `<repo>-worktrees\<branch>` next to the repo.
 
-## What it does
+---
 
-- **Terminals** (home screen) — a live, auto-tiling grid of Claude terminals (ConPTY +
-  xterm.js) for 1, 2, 4, 6, 8+ instances. Every terminal header shows that account's
-  **5-hour % and weekly %** (mini meters), status, and session duration — usage is always
-  visible, never behind a menu. Maximize/restore a pane; per-pane menu for handover,
-  failover, folder, external terminal, kill/close. `+ New Claude` picks account + repo +
-  worktree (or creates one) + optional opening prompt.
-- **Task board** (permanent right panel, resizable) — quick-add tasks; drag `.md` files
-  onto a task to link them (audits, architecture, PRDs…); **Assign ▾** composes
-  `Task: … / Reference files: @file…` and sends it straight into a running terminal.
-  Completion is **yours alone**: Claude finishing doesn't tick the box — check it and the
-  task strikes through and drops into a searchable **Completed** section.
-- **Accounts** — one card per account: status, 5-hour window with reset countdown,
-  rolling-7-day usage, estimated prompts remaining, confidence, "best pick".
-- **Failover** — when a terminal prints a usage-limit message, the app marks the account,
-  calibrates its budget from observed usage, generates a handover, **copies the session
-  transcript into the next account's config dir**, and relaunches with `--resume
-  <session-id>`. Context is preserved — same mechanism as `/move`. Auto (default on) or
-  one click from the pane menu.
-- **Project memory** — `.project-memory\{summary,architecture,decisions,todos,handover,
-  session-log}.md`, auto-created and folded into handovers. Editable under Projects →
-  Memory.
-- **Worktrees** — create / launch / remove git worktrees under `<repo>-worktrees\<branch>`
-  from the Projects view.
-- **Session recovery** — the grid *is* your persisted working set (SQLite). After a crash
-  or reboot, previous terminals reappear as **Resume** cells (`claude --continue`, same
-  folder + account). Tasks, links, projects and worktrees all persist.
+## Features in depth
 
-## Keyboard
+### 🖥️ Terminals (home screen)
+
+A live, auto-tiling grid of Claude terminals (ConPTY + xterm.js) for 1, 2, 4, 6, 8+
+instances. Every terminal header shows that account's **5-hour %** and **weekly %** (mini
+meters), status, and session duration — usage is always visible. Maximize/restore a pane;
+a per-pane menu offers handover, failover, open folder, external terminal, and
+kill/close. **`+ New Claude`** picks account + repo + worktree (or creates one) + an
+optional opening prompt.
+
+### 📋 Task board (permanent right panel)
+
+Quick-add tasks; drag `.md` files onto a task to link references (audits, architecture,
+PRDs…); **Assign ▾** composes `Task: … / Reference files: @file…` and sends it straight
+into a running terminal. **Completion is yours alone** — Claude finishing doesn't tick the
+box. Check it yourself and the task strikes through and drops into a searchable
+**Completed** section. You can also **Start** a task, which launches a fresh instance on
+the chosen account with the task pre-loaded.
+
+### 👥 Accounts
+
+One card per account showing status, the 5-hour window with a reset countdown, rolling
+7-day usage, estimated prompts remaining, a confidence chip, and a "best pick" hint for
+where to launch next.
+
+### 🔁 Failover
+
+When a terminal prints a usage-limit message, the app marks the account, calibrates its
+budget from the observed usage, generates a handover, **copies the session transcript into
+the next account's config dir**, and relaunches with `--resume <session-id>`. Context is
+preserved — the same mechanism as `/move`. Auto (default on) or one click from the pane
+menu.
+
+### 🧠 Project memory
+
+`.project-memory\{summary,architecture,decisions,todos,handover,session-log}.md`,
+auto-created and folded into handovers. Editable under **Projects → Memory**.
+
+### 🌿 Worktrees
+
+Create / launch / remove git worktrees under `<repo>-worktrees\<branch>` directly from the
+Projects view — branch list included, no shell juggling.
+
+### 💾 Session recovery
+
+The grid *is* your persisted working set (SQLite). After a crash or reboot, previous
+terminals reappear as **Resume** cells (`claude --continue`, same folder + account). Tasks,
+links, projects and worktrees all persist.
+
+---
+
+## Keyboard shortcuts
 
 | Keys | Action |
 |---|---|
@@ -111,6 +177,8 @@ npm run tauri dev            # hot-reloading dev build
 | Ctrl+B | Cycle sidebar: expanded → icons → hidden |
 | Ctrl+J | Toggle the task panel |
 | Ctrl+N | New Claude instance |
+
+---
 
 ## Real usage (recommended)
 
@@ -139,18 +207,61 @@ opus/fable-class, ×⅓ for haiku) against per-account budgets:
 Treat the percentages as good estimates, not gospel — the *Confidence* chip tells you
 how much to trust each card.
 
+---
+
+## Architecture
+
+One `.exe`: a Tauri 2 shell hosting a React/TypeScript UI in WebView2, talking to a Rust
+core over `invoke`/events. No async runtime — the main thread plus one usage-scanner
+thread and two short-lived threads per running PTY.
+
+```
+┌───────────────── claude-commander.exe (Tauri 2) ─────────────────┐
+│  WebView2 (React + TS)          invoke/events   Rust core        │
+│  ┌──────────────────────┐  ◄──────────────────► ┌──────────────┐ │
+│  │ Terminals · Accounts │                        │ accounts     │ │
+│  │ Projects · Tasks     │                        │ usage · pty  │ │
+│  │ Settings             │                        │ git·handover │ │
+│  └──────────────────────┘                        │ failover·db  │ │
+└──────────────────────────────────────────────────┴──────────────┘
+        │                          │                       │
+        ▼                          ▼                       ▼
+ %APPDATA%\...\commander.db   ~\.claude*\...\*.jsonl   claude.exe (ConPTY)
+ (SQLite, WAL)               (read-only usage source)  one PTY per instance
+```
+
+| Layer | Tech |
+|---|---|
+| Shell / native | Tauri 2, Rust (`rusqlite`, `portable-pty`, `chrono`, `dirs`) |
+| Frontend | React 18, TypeScript, Zustand, `react-mosaic-component`, `react-dnd` |
+| Terminals | xterm.js + `@xterm/addon-fit` over Windows ConPTY |
+| Storage | Bundled SQLite (WAL) at `%APPDATA%\com.rohan.claudecommander\commander.db` |
+
+- **Multi-account mechanism** — each instance is spawned with `CLAUDE_CONFIG_DIR` pointed
+  at that account's config dir; the same trick the `cc`/`ccw` scripts use.
+- **Failover mechanism** — locate the newest `<uuid>.jsonl` for the instance's cwd under
+  the source account, copy it (+ matching todo files) into the target account's identical
+  path, kill the old PTY, and spawn `claude --resume <uuid>` under the target's config.
+
+See [docs/DESIGN.md](docs/DESIGN.md) for the full IPC surface, DB schema, and build order.
+
+---
+
 ## Data & safety
 
-- App state: `%APPDATA%\com.rohan.claudecommander\commander.db` (SQLite).
-- The app only ever **reads** account config dirs, except during failover, when it
+- App state lives in `%APPDATA%\com.rohan.claudecommander\commander.db` (SQLite).
+- The app only ever **reads** account config dirs, **except** during failover, when it
   copies one session `.jsonl` (and its todo file) into the target account's dir.
 - Killing an instance kills the `claude` process; closing the app kills all of them.
-- `claude` processes themselves are ~150–250 MB each (that's Claude Code, not the app).
+- No cloud, no telemetry — nothing leaves your machine.
+- `claude` processes are ~150–250 MB each (that's Claude Code, not the app).
+
+---
 
 ## Docs
 
-- `docs/AUDIT.md` — what was cut from the original spec and why.
-- `docs/DESIGN.md` — architecture, DB schema, IPC surface, build order.
+- [docs/AUDIT.md](docs/AUDIT.md) — what was cut from the original spec and why.
+- [docs/DESIGN.md](docs/DESIGN.md) — architecture, DB schema, IPC surface, build order.
 
 ## Contributing
 
