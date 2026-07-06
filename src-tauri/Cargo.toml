@@ -1,0 +1,24 @@
+[package]
+name = "claude-commander"
+version = "0.1.0"
+edition = "2021"
+description = "Multi-account command center for Claude Code"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+portable-pty = "0.8"
+base64 = "0.22"
+chrono = "0.4"
+dirs = "5"
+
+[profile.release]
+opt-level = "s"
+lto = "thin"
+strip = "symbols"
