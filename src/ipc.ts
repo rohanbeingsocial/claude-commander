@@ -7,6 +7,7 @@ import type {
   Project,
   Recommendation,
   Task,
+  TaskWorkspace,
   Worktree,
 } from "./types";
 
@@ -90,6 +91,9 @@ export const ipc = {
   removeTaskFile: (taskId: number, path: string) => invoke<string[]>("remove_task_file", { taskId, path }),
   assignTask: (taskId: number, instanceId: number) => invoke<void>("assign_task", { taskId, instanceId }),
   startTask: (taskId: number, accountId: number) => invoke<Instance>("start_task", { taskId, accountId }),
+  ensureTaskWorkspace: (taskId: number, baseDir: string) =>
+    invoke<TaskWorkspace>("ensure_task_workspace", { taskId, baseDir }),
+  readTaskProgress: (taskId: number) => invoke<string>("read_task_progress", { taskId }),
 
   // misc
   getSettings: () => invoke<Record<string, string>>("get_settings"),

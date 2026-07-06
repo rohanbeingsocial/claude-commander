@@ -95,6 +95,7 @@ pub struct Task {
     pub assigned_account_name: Option<String>,
     pub created_at: String,
     pub completed_at: Option<String>,
+    pub workspace_dir: Option<String>,
     pub files: Vec<String>,
 }
 

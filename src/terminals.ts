@@ -35,6 +35,30 @@ export async function initPtyRouting(): Promise<void> {
   });
 }
 
+async function pasteInto(instanceId: number): Promise<void> {
+  const e = terms.get(instanceId);
+  if (!e) return;
+  let text = "";
+  try {
+    text = await navigator.clipboard.readText();
+  } catch {
+    /* clipboard read blocked */
+  }
+  if (text) e.term.paste(text);
+}
+
+async function copySelection(instanceId: number): Promise<void> {
+  const e = terms.get(instanceId);
+  if (!e) return;
+  const sel = e.term.getSelection();
+  if (!sel) return;
+  try {
+    await navigator.clipboard.writeText(sel);
+  } catch {
+    /* clipboard write blocked */
+  }
+}
+
 function ensureEntry(instanceId: number): Entry {
   let entry = terms.get(instanceId);
   if (entry) return entry;
@@ -62,6 +86,44 @@ function ensureEntry(instanceId: number): Entry {
   term.onResize(({ rows, cols }) => {
     ipc.resizePty(instanceId, rows, cols).catch(() => {});
   });
+
+  // Copy / paste — WebView2's default terminal paste is unreliable, so wire it
+  // explicitly. Paste goes through term.paste() so bracketed-paste mode (which
+  // Claude Code relies on for multi-line input) is respected.
+  term.attachCustomKeyEventHandler((ev) => {
+    if (ev.type !== "keydown") return true;
+    const key = ev.key.toLowerCase();
+    // Paste: Ctrl+V, Ctrl+Shift+V, Shift+Insert
+    if ((ev.ctrlKey && key === "v") || (ev.shiftKey && ev.key === "Insert")) {
+      ev.preventDefault();
+      void pasteInto(instanceId);
+      return false;
+    }
+    // Copy: Ctrl+Shift+C, or Ctrl+C while text is selected (else ^C passes through)
+    if (ev.ctrlKey && ev.shiftKey && key === "c") {
+      ev.preventDefault();
+      void copySelection(instanceId);
+      return false;
+    }
+    if (ev.ctrlKey && !ev.shiftKey && key === "c" && term.hasSelection()) {
+      ev.preventDefault();
+      void copySelection(instanceId);
+      term.clearSelection();
+      return false;
+    }
+    return true;
+  });
+  // Right-click: copy the selection if there is one, otherwise paste.
+  container.addEventListener("contextmenu", (ev) => {
+    ev.preventDefault();
+    if (term.hasSelection()) {
+      void copySelection(instanceId);
+      term.clearSelection();
+    } else {
+      void pasteInto(instanceId);
+    }
+  });
+
   entry = { term, fit, container, opened: false };
   terms.set(instanceId, entry);
   return entry;

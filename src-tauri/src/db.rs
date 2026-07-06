@@ -105,6 +105,7 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     add_column(conn, "tasks", "notes", "TEXT NOT NULL DEFAULT ''");
     add_column(conn, "tasks", "assigned_instance_id", "INTEGER");
     add_column(conn, "tasks", "completed_at", "TEXT");
+    add_column(conn, "tasks", "workspace_dir", "TEXT");
     Ok(())
 }
 

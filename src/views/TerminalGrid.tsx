@@ -95,6 +95,7 @@ function UsageMini({ label, pct, live }: { label: string; pct: number | undefine
 function TileToolbar({
   inst,
   account,
+  taskTitle,
   isMax,
   active,
   onToggleMax,
@@ -102,6 +103,7 @@ function TileToolbar({
 }: {
   inst: Instance;
   account: AccountUsage | undefined;
+  taskTitle?: string;
   isMax: boolean;
   active: boolean;
   onToggleMax: () => void;
@@ -193,6 +195,11 @@ function TileToolbar({
         <span className="dim small ellipsis" title={inst.cwd}>
           · {inst.projectName ?? basename(inst.cwd)}
         </span>
+        {taskTitle && (
+          <span className="cell-task ellipsis" title={`Task: ${taskTitle}`}>
+            ◆ {taskTitle}
+          </span>
+        )}
       </div>
       <div className="cell-usage">
         <UsageMini label="5h" pct={account?.fiveHour.pct} live={account?.fiveHour.source === "live"} />
@@ -324,6 +331,7 @@ function TileBody({ inst }: { inst: Instance }) {
 export default function TerminalGrid() {
   const instances = useStore((s) => s.instances);
   const accounts = useStore((s) => s.accounts);
+  const tasks = useStore((s) => s.tasks);
   const activeInstanceId = useStore((s) => s.activeInstanceId);
   const setActiveInstance = useStore((s) => s.setActiveInstance);
   const maximizedInstanceId = useStore((s) => s.maximizedInstanceId);
@@ -334,6 +342,8 @@ export default function TerminalGrid() {
   const grid = instances.slice(0, MAX_CELLS);
   const gridIds = grid.map((i) => i.id);
   const acctFor = (id: number) => accounts.find((a) => a.id === id);
+  const taskFor = (instanceId: number) =>
+    tasks.find((t) => t.assignedInstanceId === instanceId && t.status === "active")?.title;
 
   // keep the layout tree in sync with the live instance set (adds/removes, preserving sizes)
   useEffect(() => {
@@ -415,6 +425,7 @@ export default function TerminalGrid() {
           <TileToolbar
             inst={maximized}
             account={acctFor(maximized.id)}
+            taskTitle={taskFor(maximized.id)}
             isMax
             active
             onToggleMax={() => setMaximized(null)}
@@ -450,6 +461,7 @@ export default function TerminalGrid() {
                     <TileToolbar
                       inst={inst}
                       account={acctFor(id)}
+                      taskTitle={taskFor(id)}
                       isMax={false}
                       active={id === activeInstanceId}
                       onToggleMax={() => setMaximized(id)}

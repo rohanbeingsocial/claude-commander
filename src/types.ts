@@ -73,7 +73,14 @@ export interface Task {
   assignedAccountName: string | null;
   createdAt: string;
   completedAt: string | null;
+  workspaceDir: string | null;
   files: string[];
+}
+
+export interface TaskWorkspace {
+  dir: string;
+  progressRel: string;
+  prompt: string;
 }
 
 export interface Recommendation {

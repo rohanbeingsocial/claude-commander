@@ -2,6 +2,9 @@ use crate::db;
 use crate::models::{Instance, Task};
 use crate::state::AppState;
 use rusqlite::{params, Connection};
+use serde::Serialize;
+use std::fs;
+use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager, State};
 
 fn task_files(conn: &Connection, task_id: i64) -> Vec<String> {
@@ -19,7 +22,7 @@ pub fn list_tasks(state: State<'_, AppState>) -> Result<Vec<Task>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT t.id, t.title, t.description, t.notes, t.project_id, p.name, t.priority, t.complexity,
-                    t.status, t.account_id, t.assigned_instance_id, a.name, t.created_at, t.completed_at
+                    t.status, t.account_id, t.assigned_instance_id, a.name, t.created_at, t.completed_at, t.workspace_dir
              FROM tasks t
              LEFT JOIN projects p ON p.id=t.project_id
              LEFT JOIN accounts a ON a.id=t.account_id
@@ -43,6 +46,7 @@ pub fn list_tasks(state: State<'_, AppState>) -> Result<Vec<Task>, String> {
                 assigned_account_name: r.get(11)?,
                 created_at: r.get(12)?,
                 completed_at: r.get(13)?,
+                workspace_dir: r.get(14)?,
                 files: Vec::new(),
             })
         })
@@ -208,21 +212,141 @@ pub fn start_task(app: AppHandle, task_id: i64, account_id: i64) -> Result<Insta
         let files = task_files(&conn, task_id);
         (row.0, row.1, row.2, row.3, files)
     };
-    let prompt = compose_prompt(&title, &description, &files, &root);
+    let (dir, prompt) = make_workspace(&root, task_id, &title, &description, &files)?;
     let inst = crate::pty::spawn_claude(&app, account_id, Some(project_id), &root, "new", "", Some(&prompt))?;
     {
         let conn = state.db.lock().unwrap();
         let _ = conn.execute(
-            "UPDATE tasks SET status='active', account_id=?1, assigned_instance_id=?2, completed_at=NULL, updated_at=?3 WHERE id=?4",
-            params![account_id, inst.id, db::now_str(), task_id],
+            "UPDATE tasks SET status='active', account_id=?1, assigned_instance_id=?2, workspace_dir=?3, completed_at=NULL, updated_at=?4 WHERE id=?5",
+            params![account_id, inst.id, dir, db::now_str(), task_id],
         );
     }
     Ok(inst)
 }
 
+/// Where a task's per-task workspace folder lives, relative to the working dir it runs in.
+/// Each task gets `<base>/.commander-tasks/<id>-<slug>/` holding `prompt.md` (the prompt we
+/// sent) and `progress.md` (which Claude keeps up to date as it works).
+fn task_slug(title: &str) -> String {
+    let mut s: String = title
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
+        .collect();
+    while s.contains("--") {
+        s = s.replace("--", "-");
+    }
+    let s: String = s.trim_matches('-').chars().take(40).collect();
+    let s = s.trim_matches('-').to_string();
+    if s.is_empty() {
+        "task".into()
+    } else {
+        s
+    }
+}
+
+fn progress_rel(task_id: i64, title: &str) -> String {
+    format!(".commander-tasks/{}-{}/progress.md", task_id, task_slug(title))
+}
+
+fn task_dir(base: &str, task_id: i64, title: &str) -> PathBuf {
+    Path::new(base)
+        .join(".commander-tasks")
+        .join(format!("{}-{}", task_id, task_slug(title)))
+}
+
+/// Create (or refresh) a task's workspace folder under `base` and return `(dir, prompt)`.
+/// `prompt.md` is rewritten to match the prompt we send; `progress.md` is only seeded if
+/// missing so Claude's own updates are never clobbered.
+fn make_workspace(
+    base: &str,
+    task_id: i64,
+    title: &str,
+    description: &str,
+    files: &[String],
+) -> Result<(String, String), String> {
+    if !Path::new(base).is_dir() {
+        return Err("Working directory does not exist".into());
+    }
+    let dir = task_dir(base, task_id, title);
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let prompt = compose_prompt(title, description, files, base, &progress_rel(task_id, title));
+    fs::write(dir.join("prompt.md"), format!("# {title}\n\n{prompt}\n")).map_err(|e| e.to_string())?;
+    let progress = dir.join("progress.md");
+    if !progress.exists() {
+        fs::write(
+            &progress,
+            format!("# Progress: {title}\n\n_Not started yet. Claude updates this file as it works on the task._\n"),
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    Ok((dir.to_string_lossy().to_string(), prompt))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskWorkspace {
+    pub dir: String,
+    pub progress_rel: String,
+    pub prompt: String,
+}
+
+/// Ensure the task's workspace exists under `base_dir` (the terminal's cwd) and return the
+/// prompt to send. Called from the UI's Assign flow before writing to the pty.
+#[tauri::command]
+pub fn ensure_task_workspace(
+    state: State<'_, AppState>,
+    task_id: i64,
+    base_dir: String,
+) -> Result<TaskWorkspace, String> {
+    let (title, description, files) = {
+        let conn = state.db.lock().unwrap();
+        let (title, description): (String, String) = conn
+            .query_row("SELECT title, description FROM tasks WHERE id=?1", [task_id], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .map_err(|_| "Task not found".to_string())?;
+        let files = task_files(&conn, task_id);
+        (title, description, files)
+    };
+    let (dir, prompt) = make_workspace(&base_dir, task_id, &title, &description, &files)?;
+    {
+        let conn = state.db.lock().unwrap();
+        let _ = conn.execute(
+            "UPDATE tasks SET workspace_dir=?1, updated_at=?2 WHERE id=?3",
+            params![dir, db::now_str(), task_id],
+        );
+    }
+    Ok(TaskWorkspace {
+        dir,
+        progress_rel: progress_rel(task_id, &title),
+        prompt,
+    })
+}
+
+/// Read back a task's `progress.md` (what Claude has recorded). Empty string if not written yet.
+#[tauri::command]
+pub fn read_task_progress(state: State<'_, AppState>, task_id: i64) -> Result<String, String> {
+    let dir: Option<String> = {
+        let conn = state.db.lock().unwrap();
+        conn.query_row("SELECT workspace_dir FROM tasks WHERE id=?1", [task_id], |r| {
+            r.get::<_, Option<String>>(0)
+        })
+        .ok()
+        .flatten()
+    };
+    let dir = dir
+        .filter(|d| !d.is_empty())
+        .ok_or("No workspace yet — assign or start this task first.")?;
+    let p = Path::new(&dir).join("progress.md");
+    if !p.exists() {
+        return Ok(String::new());
+    }
+    fs::read_to_string(&p).map_err(|e| e.to_string())
+}
+
 /// Build the prompt sent to Claude for a task: title, description, and @-referenced files.
 /// Files under `cwd` are referenced relative (so Claude's @ autocompletes them).
-pub fn compose_prompt(title: &str, description: &str, files: &[String], cwd: &str) -> String {
+pub fn compose_prompt(title: &str, description: &str, files: &[String], cwd: &str, progress_rel: &str) -> String {
     let mut prompt = format!("Task: {title}");
     if !description.trim().is_empty() {
         prompt.push_str("\n\n");
@@ -234,7 +358,11 @@ pub fn compose_prompt(title: &str, description: &str, files: &[String], cwd: &st
             prompt.push_str(&format!("\n@{}", rel_ref(f, cwd)));
         }
     }
-    prompt.push_str("\n\nWhen finished, update .project-memory/todos.md with what was done.");
+    prompt.push_str(&format!(
+        "\n\nTrack your progress in @{progress_rel} — as you work and when you finish, overwrite that file \
+         with a short status (what's done, what's left, any blockers). That progress file is the record for \
+         this task; don't update any todo list."
+    ));
     prompt
 }
 
@@ -260,9 +388,18 @@ mod tests {
             "details",
             &["D:\\proj\\docs\\audit.md".into(), "C:\\other\\spec.md".into()],
             "D:\\proj",
+            ".commander-tasks/1-do-it/progress.md",
         );
         assert!(p.contains("Task: Do it"));
         assert!(p.contains("@docs/audit.md"));
         assert!(p.contains("@C:\\other\\spec.md"));
+        assert!(p.contains("@.commander-tasks/1-do-it/progress.md"));
+    }
+
+    #[test]
+    fn slug_is_filesystem_safe() {
+        assert_eq!(task_slug("Fix the  Parser!!"), "fix-the-parser");
+        assert_eq!(task_slug("   "), "task");
+        assert_eq!(task_slug("A/B\\C:D"), "a-b-c-d");
     }
 }

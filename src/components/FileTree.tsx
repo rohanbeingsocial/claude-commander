@@ -8,11 +8,26 @@ import { basename } from "../util";
 
 const LS_ROOT = "explorerRoot";
 
-function FileNode({ entry, depth }: { entry: FsEntry; depth: number }) {
+function FileNode({ entry, depth, reloadKey }: { entry: FsEntry; depth: number; reloadKey: number }) {
   const toast = useStore((s) => s.toast);
   const [open_, setOpen] = useState(false);
   const [children, setChildren] = useState<FsEntry[] | null>(null);
   const [loading, setLoading] = useState(false);
+
+  // A refresh (reloadKey bump) re-fetches this folder's children if it's expanded,
+  // so newly created/deleted files show up without collapsing the tree.
+  useEffect(() => {
+    if (reloadKey === 0 || !open_) return;
+    let alive = true;
+    ipc
+      .listDir(entry.path)
+      .then((c) => alive && setChildren(c))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reloadKey]);
 
   const [{ dragging }, drag] = useDrag<FileDragItem, unknown, { dragging: boolean }>(
     () => ({
@@ -54,7 +69,7 @@ function FileNode({ entry, depth }: { entry: FsEntry; depth: number }) {
                 …
               </div>
             )}
-            {children?.map((c) => <FileNode key={c.path} entry={c} depth={depth + 1} />)}
+            {children?.map((c) => <FileNode key={c.path} entry={c} depth={depth + 1} reloadKey={reloadKey} />)}
             {children && children.length === 0 && !loading && (
               <div className="ft-row dim small" style={{ paddingLeft: (depth + 1) * 10 + 16 }}>
                 empty
@@ -85,6 +100,7 @@ export default function FileTree() {
   const activeInstanceId = useStore((s) => s.activeInstanceId);
   const [root, setRoot] = useState<string>(() => localStorage.getItem(LS_ROOT) || "");
   const [entries, setEntries] = useState<FsEntry[] | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   const activeCwd = useMemo(
     () => instances.find((i) => i.id === activeInstanceId)?.cwd,
@@ -110,12 +126,14 @@ export default function FileTree() {
       return;
     }
     ipc.listDir(root).then(setEntries).catch(() => setEntries([]));
-  }, [root]);
+  }, [root, reloadKey]);
 
   const pick = async () => {
     const dir = await open({ directory: true, title: "Open a folder in the explorer" });
     if (typeof dir === "string") setRootPersist(dir);
   };
+
+  const refresh = () => setReloadKey((k) => k + 1);
 
   return (
     <div className="file-tree">
@@ -128,13 +146,16 @@ export default function FileTree() {
             ◎
           </button>
         )}
+        <button className="icon-btn" title="Refresh — pick up file changes" onClick={refresh} disabled={!root}>
+          ⟳
+        </button>
         <button className="icon-btn" title="Open a folder" onClick={pick}>
           ⌂
         </button>
       </div>
       <div className="ft-body">
         {!root && <div className="dim small ft-empty">Launch a terminal or open a folder.</div>}
-        {entries?.map((e) => <FileNode key={e.path} entry={e} depth={0} />)}
+        {entries?.map((e) => <FileNode key={e.path} entry={e} depth={0} reloadKey={reloadKey} />)}
         {entries && entries.length === 0 && root && <div className="dim small ft-empty">Empty folder</div>}
       </div>
     </div>

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useDrop } from "react-dnd";
 import { useDropdown } from "../useDropdown";
@@ -11,26 +11,13 @@ import { basename, b64encodeText, relTime } from "../util";
 const PRIO = ["", "P1", "P2", "P3"];
 const DOC_EXT = /\.(md|markdown|mdx|txt)$/i;
 
-/** Mirror of the Rust compose_prompt: task + @-referenced files, relative to cwd. */
-function composePrompt(task: Task, cwd: string): string {
-  let p = `Task: ${task.title}`;
-  if (task.description.trim()) p += `\n\n${task.description.trim()}`;
-  if (task.files.length) {
-    p += "\n\nReference files:";
-    for (const f of task.files) p += `\n@${relRef(f, cwd)}`;
-  }
-  p += "\n\nWhen finished, update .project-memory/todos.md with what was done.";
-  return p;
-}
-
-function relRef(file: string, cwd: string): string {
-  const f = file.replace(/\//g, "\\");
-  const c = cwd.replace(/\//g, "\\").replace(/\\+$/, "") + "\\";
-  if (f.toLowerCase().startsWith(c.toLowerCase())) return f.slice(c.length).replace(/\\/g, "/");
-  return file;
-}
-
 const isLive = (i: Instance) => i.status === "running" || i.status === "limit_hit";
+
+/** A stable, distinct accent colour per task so cards are easy to tell apart. */
+function taskAccent(id: number): string {
+  const hue = (((id * 47) % 360) + 360) % 360;
+  return `hsl(${hue} 62% 60%)`;
+}
 
 function TaskCard({
   task,
@@ -53,6 +40,24 @@ function TaskCard({
   const [desc, setDesc] = useState(task.description);
   const [notes, setNotes] = useState(task.notes);
   const [confirmDel, setConfirmDel] = useState(false);
+  const [progress, setProgress] = useState("");
+  const [progressLoading, setProgressLoading] = useState(false);
+
+  const loadProgress = async () => {
+    setProgressLoading(true);
+    try {
+      setProgress(await ipc.readTaskProgress(task.id));
+    } catch {
+      setProgress("");
+    } finally {
+      setProgressLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (open && task.workspaceDir) loadProgress();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, task.workspaceDir]);
 
   // drop target for files dragged from the sidebar explorer
   const [{ over }, drop] = useDrop<FileDragItem, unknown, { over: boolean }>(
@@ -113,8 +118,10 @@ function TaskCard({
   const assign = async (inst: Instance) => {
     assignDd.close();
     try {
-      const prompt = composePrompt(task, inst.cwd);
-      await ipc.writePty(inst.id, b64encodeText(prompt));
+      // Creates .commander-tasks/<id>-<slug>/{prompt.md,progress.md} under the terminal's
+      // cwd and returns the prompt (which tells Claude to keep progress.md up to date).
+      const ws = await ipc.ensureTaskWorkspace(task.id, inst.cwd);
+      await ipc.writePty(inst.id, b64encodeText(ws.prompt));
       // paste-then-submit: let Claude's input settle, then send Enter
       setTimeout(() => ipc.writePty(inst.id, b64encodeText("\r")).catch(() => {}), 220);
       await ipc.assignTask(task.id, inst.id);
@@ -156,6 +163,7 @@ function TaskCard({
         drop(el);
       }}
       className={`task-card ${done ? "done" : ""} ${isDropTarget || over ? "drop-target" : ""}`}
+      style={{ "--task-accent": taskAccent(task.id) } as CSSProperties}
     >
       <div className="task-top">
         <input type="checkbox" checked={done} onChange={toggleDone} title="Only you complete a task" />
@@ -233,6 +241,17 @@ function TaskCard({
             onChange={(e) => setNotes(e.target.value)}
             onBlur={() => notes !== task.notes && saveField({ notes })}
           />
+          {task.workspaceDir && (
+            <>
+              <div className="progress-head">
+                <label className="field-label">Progress (Claude keeps this updated)</label>
+                <button className="btn btn-ghost btn-sm" onClick={loadProgress} disabled={progressLoading}>
+                  {progressLoading ? "…" : "Refresh"}
+                </button>
+              </div>
+              <pre className="task-progress">{progress.trim() || "No progress recorded yet."}</pre>
+            </>
+          )}
           <label className="field-label">Project</label>
           <select value={task.projectId ?? ""} onChange={(e) => setProject(e.target.value === "" ? "" : Number(e.target.value))}>
             <option value="">no project</option>

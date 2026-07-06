@@ -111,6 +111,8 @@ fn main() {
             tasks::remove_task_file,
             tasks::assign_task,
             tasks::start_task,
+            tasks::ensure_task_workspace,
+            tasks::read_task_progress,
             misc::get_settings,
             misc::set_setting,
             misc::open_in_explorer,
