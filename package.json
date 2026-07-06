@@ -1,0 +1,53 @@
+{
+  "name": "claude-commander",
+  "version": "0.1.0",
+  "description": "A local-first operations center for Claude Code on Windows: a live grid of Claude terminals with per-account usage meters, a task board, git-worktree launching, and zero-context-loss handover between accounts. Built with Tauri 2 + React.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "author": "Rohan Deogaonkar <rohandeogaonkar.9@gmail.com>",
+  "homepage": "https://github.com/rohanbeingsocial/claude-commander#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rohanbeingsocial/claude-commander.git"
+  },
+  "bugs": {
+    "url": "https://github.com/rohanbeingsocial/claude-commander/issues"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "tauri",
+    "terminal",
+    "conpty",
+    "xterm",
+    "developer-tools",
+    "react",
+    "windows"
+  ],
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.0.0",
+    "@tauri-apps/plugin-dialog": "^2.0.0",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0",
+    "react": "^18.3.1",
+    "react-dnd": "^16.0.1",
+    "react-dnd-touch-backend": "^16.0.1",
+    "react-dom": "^18.3.1",
+    "react-mosaic-component": "^6.2.0",
+    "zustand": "^4.5.5"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "typescript": "^5.5.3",
+    "vite": "^5.4.0"
+  }
+}
