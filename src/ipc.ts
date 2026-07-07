@@ -1,13 +1,17 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   AccountUsage,
+  ClosureReport,
   FsEntry,
   HandoverRow,
   Instance,
+  McpStatus,
   Project,
   Recommendation,
   Task,
   TaskWorkspace,
+  WorkerTask,
+  WorkerUsage,
   Worktree,
 } from "./types";
 
@@ -49,6 +53,9 @@ export const ipc = {
     mode?: string;
     extraArgs?: string;
     initialPrompt?: string;
+    isOrchestrator?: boolean;
+    workerPool?: number[];
+    useOwnAgents?: boolean;
   }) => invoke<Instance>("launch_instance", args),
   writePty: (instanceId: number, data: string) => invoke<void>("write_pty", { instanceId, data }),
   resizePty: (instanceId: number, rows: number, cols: number) =>
@@ -68,6 +75,27 @@ export const ipc = {
     invoke<Instance>("failover_instance", { instanceId, toAccountId }),
   recommendAccounts: (excludeAccountId?: number) =>
     invoke<Recommendation[]>("recommend_accounts", { excludeAccountId }),
+
+  // orchestration (delegate across accounts) — see docs/ORCHESTRATION.md
+  delegateWorker: (args: {
+    accountId: number;
+    cwd: string;
+    prompt: string;
+    orchestratorInstanceId?: number | null;
+    model?: string;
+    extraArgs?: string;
+    contextRefs?: string[];
+  }) => invoke<WorkerTask>("delegate_worker", args),
+  listWorkerTasks: (orchestratorInstanceId?: number | null) =>
+    invoke<WorkerTask[]>("list_worker_tasks", { orchestratorInstanceId: orchestratorInstanceId ?? null }),
+  workerReport: (workerId: number) => invoke<ClosureReport>("worker_report", { workerId }),
+  workerUsage: (accountId: number) => invoke<WorkerUsage>("worker_usage", { accountId }),
+  stopWorker: (workerId: number) => invoke<void>("stop_worker", { workerId }),
+  reassignWorker: (workerId: number, targetAccountId?: number | null) =>
+    invoke<WorkerTask>("reassign_worker", { workerId, targetAccountId: targetAccountId ?? null }),
+  setOperator: (args: { instanceId: number; isOperator: boolean; workerPool: number[]; useOwnAgents: boolean }) =>
+    invoke<void>("set_operator", args),
+  mcpStatus: () => invoke<McpStatus>("mcp_status"),
 
   // tasks
   listTasks: () => invoke<Task[]>("list_tasks"),

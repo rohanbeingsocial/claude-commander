@@ -99,6 +99,26 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             UNIQUE(task_id, path)
         );
         CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS worker_tasks(
+            id INTEGER PRIMARY KEY,
+            orchestrator_instance_id INTEGER REFERENCES instances(id) ON DELETE SET NULL,
+            account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+            model TEXT,
+            prompt TEXT NOT NULL,
+            cwd TEXT NOT NULL,
+            folder TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'running',
+            session_id TEXT,
+            limit_kind TEXT,
+            frees_at TEXT,
+            exit_code INTEGER,
+            pid INTEGER,
+            result_summary TEXT,
+            reassigned_to INTEGER REFERENCES worker_tasks(id) ON DELETE SET NULL,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+            ended_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_worker_orch ON worker_tasks(orchestrator_instance_id, id);
         "#,
     )?;
     // additive columns for existing databases (ignore "duplicate column" errors)
@@ -106,6 +126,9 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     add_column(conn, "tasks", "assigned_instance_id", "INTEGER");
     add_column(conn, "tasks", "completed_at", "TEXT");
     add_column(conn, "tasks", "workspace_dir", "TEXT");
+    add_column(conn, "instances", "is_orchestrator", "INTEGER NOT NULL DEFAULT 0");
+    add_column(conn, "instances", "worker_pool", "TEXT");
+    add_column(conn, "instances", "use_own_agents", "INTEGER NOT NULL DEFAULT 0");
     Ok(())
 }
 

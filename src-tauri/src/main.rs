@@ -5,8 +5,10 @@ mod db;
 mod failover;
 mod git;
 mod handover;
+mod mcp;
 mod misc;
 mod models;
+mod orchestration;
 mod projects;
 mod pty;
 mod state;
@@ -35,7 +37,11 @@ fn main() {
                 db: Mutex::new(conn),
                 ptys: Mutex::new(HashMap::new()),
                 claude_path: Mutex::new(claude),
+                mcp: state::McpState::new(),
             });
+
+            // local MCP server: lets an orchestrator instance delegate through Commander
+            mcp::start(app.handle().clone());
 
             // background usage scanner: incremental JSONL parse + push snapshot to UI
             let handle = app.handle().clone();
@@ -105,6 +111,14 @@ fn main() {
             handover::list_handovers,
             failover::failover_instance,
             failover::recommend_accounts,
+            orchestration::delegate_worker,
+            orchestration::list_worker_tasks,
+            orchestration::worker_report,
+            orchestration::worker_usage,
+            orchestration::stop_worker,
+            orchestration::reassign_worker,
+            orchestration::set_operator,
+            mcp::mcp_status,
             tasks::list_tasks,
             tasks::add_task,
             tasks::update_task,

@@ -158,7 +158,7 @@ pub fn failover_core(app: &AppHandle, instance_id: i64, to_account_id: i64, reas
     }
     crate::pty::kill_pty(app, instance_id);
 
-    let new_inst = crate::pty::spawn_claude(app, to_account_id, project_id, &cwd, &mode, "", init_prompt.as_deref())?;
+    let new_inst = crate::pty::spawn_claude(app, to_account_id, project_id, &cwd, &mode, "", init_prompt.as_deref(), None)?;
 
     {
         let conn = state.db.lock().unwrap();

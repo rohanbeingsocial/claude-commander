@@ -26,12 +26,18 @@ export default function LaunchModal() {
   const [mode, setMode] = useState<"new" | "continue">("new");
   const [extraArgs, setExtraArgs] = useState("");
   const [initialPrompt, setInitialPrompt] = useState("");
+  const [isOrchestrator, setIsOrchestrator] = useState(false);
+  const [workerPool, setWorkerPool] = useState<number[]>([]);
+  const [useOwnAgents, setUseOwnAgents] = useState(false);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (!launchOpen) return;
     setBusy(false);
     setInitialPrompt("");
+    setIsOrchestrator(false);
+    setWorkerPool([]);
+    setUseOwnAgents(false);
     setNewBranch("");
     setMode((launchPreset?.mode as "new" | "continue") ?? "new");
     setExtraArgs(settings.extra_args_default ?? "");
@@ -131,6 +137,9 @@ export default function LaunchModal() {
         mode,
         extraArgs,
         initialPrompt: initialPrompt || undefined,
+        isOrchestrator,
+        workerPool: isOrchestrator ? workerPool : undefined,
+        useOwnAgents: isOrchestrator ? useOwnAgents : undefined,
       });
       const s = useStore.getState();
       await Promise.all([s.refreshInstances(), s.refreshAccounts(), s.refreshSettings()]);
@@ -261,6 +270,50 @@ export default function LaunchModal() {
             (--continue)
           </label>
         </div>
+
+        <label className="field-label">Orchestration</label>
+        <label className="radio">
+          <input type="checkbox" checked={isOrchestrator} onChange={(e) => setIsOrchestrator(e.target.checked)} /> Make
+          this an orchestrator — it delegates subtasks to the worker accounts below via Commander's MCP tools
+        </label>
+        {isOrchestrator && (
+          <>
+            <div className="info-box dim small" style={{ marginTop: 6 }}>
+              Commander points this instance at its local <strong>MCP server</strong>, so the orchestrator can{" "}
+              <code>delegate</code>/<code>poll</code>/<code>collect</code> across the pool itself. By default it launches
+              with <code>--disallowedTools Task</code> so it can't fall back to its own subagents — it must delegate to
+              the accounts below. Pool accounts must be signed in (headless workers can't do interactive login).
+            </div>
+            <div className="rec-list" style={{ marginTop: 6 }}>
+              {accounts
+                .filter((a) => a.enabled && a.id !== accountId)
+                .map((a) => (
+                  <label key={a.id} className="rec-item" style={{ cursor: "pointer" }}>
+                    <span>
+                      <input
+                        type="checkbox"
+                        checked={workerPool.includes(a.id)}
+                        onChange={(e) =>
+                          setWorkerPool((p) => (e.target.checked ? [...p, a.id] : p.filter((x) => x !== a.id)))
+                        }
+                        style={{ marginRight: 8 }}
+                      />
+                      <span className={`status-dot st-${a.status}`} />
+                      {a.name}
+                    </span>
+                    <span className="dim small">5h {Math.min(Math.round(a.fiveHour.pct), 999)}%</span>
+                  </label>
+                ))}
+              {accounts.filter((a) => a.enabled && a.id !== accountId).length === 0 && (
+                <div className="dim small">No other enabled accounts to delegate to. Add one in Settings.</div>
+              )}
+            </div>
+            <label className="radio" style={{ marginTop: 6 }}>
+              <input type="checkbox" checked={useOwnAgents} onChange={(e) => setUseOwnAgents(e.target.checked)} /> Also
+              allow its own subagents (keep the Task tool) — off by default so it delegates only across accounts
+            </label>
+          </>
+        )}
 
         <label className="field-label">Opening prompt (optional)</label>
         <textarea

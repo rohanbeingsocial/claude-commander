@@ -119,6 +119,7 @@ export default function SettingsView() {
   }, [settings]);
 
   const autoFailover = settings.auto_failover === "1";
+  const autoReassign = settings.auto_reassign === "1";
   const usageTap = settings.usage_tap === "1";
 
   const toggleTap = async () => {
@@ -209,6 +210,15 @@ export default function SettingsView() {
           />
           Automatic failover — when a running instance hits a usage limit, copy its session to the best available account
           and resume it there without asking
+        </label>
+        <label className="radio">
+          <input
+            type="checkbox"
+            checked={autoReassign}
+            onChange={(e) => setKey("auto_reassign", e.target.checked ? "1" : "0")}
+          />
+          Auto-reassign delegated workers — when a worker hits its limit, hand the remainder (with its progress) to the
+          best worker account automatically instead of pausing to ask. Off = pause &amp; report (default).
         </label>
         <div className="row" style={{ marginTop: 8 }}>
           <label className="inline-label">

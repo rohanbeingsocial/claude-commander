@@ -255,7 +255,13 @@ pub fn boot(conn: &Connection) {
     );
     let cutoff = usage::fmt_ts(chrono::Utc::now() - chrono::Duration::days(30));
     let _ = conn.execute("DELETE FROM usage_events WHERE ts < ?1", params![cutoff]);
-    for (k, v) in [("auto_failover", "1"), ("scan_interval_secs", "60"), ("extra_args_default", "")] {
+    for (k, v) in [
+        ("auto_failover", "1"),
+        ("scan_interval_secs", "60"),
+        ("extra_args_default", ""),
+        ("auto_reassign", "0"),
+        ("worker_extra_args_default", "--dangerously-skip-permissions"),
+    ] {
         let _ = conn.execute("INSERT OR IGNORE INTO settings(key,value) VALUES(?1,?2)", params![k, v]);
     }
     let _ = discover(conn);

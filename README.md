@@ -13,6 +13,11 @@ terminal header, assign tasks (with linked markdown) straight into a running Cla
 hand work between accounts when one hits a limit — without losing a single message of
 context.
 
+It also **delegates tasks across accounts**: run one Claude as an *operator* that farms
+subtasks out to worker Claudes on your other accounts (headless), so heavy work is spread
+across several rate-limit windows instead of draining one — and a worker that hits its
+limit never loses progress.
+
 Built with **Tauri 2 (Rust) + React + SQLite + xterm.js/ConPTY**. No Electron, no cloud,
 no telemetry — everything stays on your machine.
 
@@ -24,6 +29,7 @@ no telemetry — everything stays on your machine.
 - [Feature overview](#feature-overview)
 - [Install & build](#install--build-from-source)
 - [First run](#first-run)
+- [Task delegation (Operator mode)](#task-delegation-operator-mode)
 - [Features in depth](#features-in-depth)
 - [Keyboard shortcuts](#keyboard-shortcuts)
 - [Real usage vs. estimation](#real-usage-recommended)
@@ -59,11 +65,12 @@ no telemetry — everything stays on your machine.
 | 📊 **Live usage meters** | Every terminal header shows that account's **5-hour %** and **weekly %** as mini meters — usage always visible, never behind a menu. |
 | 👥 **Multi-account** | Auto-discovers accounts from `~\.claude` + `~\.claude-accounts\*`; each instance runs under its own `CLAUDE_CONFIG_DIR`. **＋ Add account** in Settings creates a fresh login slot in one click — no hand-made folders. |
 | 📋 **Task board** | Permanent, resizable panel. Quick-add tasks, drag `.md` files to link them, **Assign ▾** to inject a task into a running Claude. You control completion. |
+| 🕹️ **Task delegation** | Run a Claude as an **Operator** that delegates subtasks to worker accounts (headless `claude -p`). Work spreads across accounts; a limit-hit worker keeps its progress and is resumable or reassignable. **Workers** tab + per-pane ⚙ operator settings. |
 | 🔁 **Failover** | On a usage-limit message, copies the session transcript to another account and relaunches with `--resume` — zero context loss. |
 | 🧠 **Project memory** | Auto-maintained `.project-memory\*.md` (summary, architecture, decisions, todos, handover, session-log) folded into handovers. |
 | 🌿 **Worktrees** | Create / launch / remove git worktrees under `<repo>-worktrees\<branch>` straight from the UI. |
 | 💾 **Session recovery** | The grid is persisted (SQLite). After a crash/reboot, terminals reappear as **Resume** cells (`claude --continue`). |
-| ⌨️ **Keyboard-driven** | Ctrl+1…4 views, Ctrl+B sidebar, Ctrl+J task panel, Ctrl+N new instance. |
+| ⌨️ **Keyboard-driven** | Ctrl+1…5 views, Ctrl+B sidebar, Ctrl+J task panel, Ctrl+N new instance; terminal copy/paste. |
 | 🔌 **Real usage tap** | Optional, reversible tap into Claude Code's status line for **LIVE** rate-limit numbers with true reset countdowns. |
 
 ---
@@ -150,6 +157,72 @@ npm run tauri dev            # hot-reloading dev build; changes to the UI reload
 
 ---
 
+## Task delegation (Operator mode)
+
+Instead of one Claude doing everything on one account, run a Claude as an **Operator** that
+delegates subtasks to **worker** Claudes on your *other* accounts. Workers run **headless**
+(`claude -p --output-format stream-json`), each in the same repo. Because the heavy
+execution is fanned out across several accounts, no single account's 5-hour window drains
+fast — and the operator itself does little token volume (plan, dispatch, read summaries).
+
+> The idea: a capable model plans and hands work down to cheaper models — but across
+> **different accounts**, so your limits don't hit as quickly.
+
+### Turning it on
+
+Two ways, both storing the same per-instance config:
+
+- **At launch** — in **+ New Claude**, tick **"Make this an orchestrator"** and check the
+  worker accounts to delegate to.
+- **On a running pane** — click the **⚙ gear** in any terminal header to open its **Operator
+  settings**:
+  - **Operator** — delegate the work given to this instance to the accounts below (or itself).
+  - **Delegation accounts** — the worker pool (your other enabled accounts).
+  - **Use agents within the operator usage pool** — also let the operator use its *own*
+    subagents for some tasks. **Off by default** (pure delegation).
+
+  When on, an **⚙ OPERATOR** badge shows in that pane's header.
+
+### The Workers tab
+
+The **Workers** view (Ctrl+4) is the delegation console:
+
+- **Delegate a task** — pick a worker account + model (Opus / Sonnet / Haiku / Fable / account
+  default), a working directory, and a prompt. The worker launches headless with the
+  operator's context.
+- **Watch workers live** — status per worker (running / done / paused at limit / failed).
+- **Closure report** — open any worker to see its **progress** (its own `progress.md`, or a
+  summary distilled from the output stream), its **result**, the **working-tree diff**, its
+  **resume handle**, and the account's **reset time**.
+- **Stop / Reassign** — kill a worker, or hand its remaining work to another account.
+- **Check real usage** — reads each account's **real** 5h/weekly numbers straight from
+  Claude Code's status line (not Commander's estimate).
+
+Each worker gets its own folder under the repo:
+`.commander-tasks\<id>-<slug>\{prompt.md, context.md, progress.md, stream.jsonl, result.md}`.
+
+### Progress is never lost
+
+A worker that hits a usage limit **does not lose its work**. On any stop, Commander writes a
+**closure report** so the operator always learns how far it got, and:
+
+- **Pause & report (default)** — the worker is marked *paused at limit* with its progress,
+  diff, resume handle and reset time; nothing else happens until you decide.
+- **Auto-reassign (opt-in)** — turn on **Settings → Auto-reassign delegated workers** and
+  Commander hands the remainder (progress + diff as context) to the best-headroom worker
+  account automatically.
+
+Either way the on-disk changes, `progress.md`, and the resumable session all survive, so the
+work can be continued on the same account after reset, reassigned to another account, or
+picked up by you.
+
+> **Status:** the engine, Workers console, per-pane operator settings, closure reports and
+> reassignment all work today (delegation is driven from the **Workers** tab). Letting an
+> Operator instance *automatically* delegate the work you type into it needs the MCP layer,
+> which is the next milestone — see [docs/ORCHESTRATION.md](docs/ORCHESTRATION.md).
+
+---
+
 ## Features in depth
 
 ### 🖥️ Terminals (home screen)
@@ -206,7 +279,7 @@ links, projects and worktrees all persist.
 
 | Keys | Action |
 |---|---|
-| Ctrl+1…4 | Terminals / Accounts / Projects / Settings |
+| Ctrl+1…5 | Terminals / Accounts / Projects / Workers / Settings |
 | Ctrl+B | Cycle sidebar: expanded → icons → hidden |
 | Ctrl+J | Toggle the task panel |
 | Ctrl+N | New Claude instance |
@@ -262,8 +335,9 @@ thread and two short-lived threads per running PTY.
 │  ┌──────────────────────┐  ◄──────────────────► ┌──────────────┐ │
 │  │ Terminals · Accounts │                        │ accounts     │ │
 │  │ Projects · Tasks     │                        │ usage · pty  │ │
-│  │ Settings             │                        │ git·handover │ │
+│  │ Workers · Settings   │                        │ git·handover │ │
 │  └──────────────────────┘                        │ failover·db  │ │
+│                                                   │ orchestration│ │
 └──────────────────────────────────────────────────┴──────────────┘
         │                          │                       │
         ▼                          ▼                       ▼
@@ -283,6 +357,11 @@ thread and two short-lived threads per running PTY.
 - **Failover mechanism** — locate the newest `<uuid>.jsonl` for the instance's cwd under
   the source account, copy it (+ matching todo files) into the target account's identical
   path, kill the old PTY, and spawn `claude --resume <uuid>` under the target's config.
+- **Delegation mechanism** — an operator delegates to a worker by spawning a headless
+  `claude -p --output-format stream-json` process under the worker account's
+  `CLAUDE_CONFIG_DIR`, in its own `.commander-tasks\<id>-<slug>\` folder. A monitor thread
+  captures the stream, detects limits, and writes a closure report on exit; usage/reset
+  numbers come from the status-line tap. See [docs/ORCHESTRATION.md](docs/ORCHESTRATION.md).
 
 See [docs/DESIGN.md](docs/DESIGN.md) for the full IPC surface, DB schema, and build order.
 
@@ -291,8 +370,10 @@ See [docs/DESIGN.md](docs/DESIGN.md) for the full IPC surface, DB schema, and bu
 ## Data & safety
 
 - App state lives in `%APPDATA%\com.rohan.claudecommander\commander.db` (SQLite).
-- The app only ever **reads** account config dirs, **except** during failover, when it
-  copies one session `.jsonl` (and its todo file) into the target account's dir.
+- The app only ever **reads** account config dirs, **except** during failover (it copies one
+  session `.jsonl` + its todo file into the target account's dir) and the optional usage tap.
+- Delegated workers write only inside the repo's `.commander-tasks\` folders and run under the
+  worker account you selected; they're plain `claude -p` processes and are killed on stop/exit.
 - Killing an instance kills the `claude` process; closing the app kills all of them.
 - No cloud, no telemetry — nothing leaves your machine.
 - `claude` processes are ~150–250 MB each (that's Claude Code, not the app).
@@ -303,6 +384,7 @@ See [docs/DESIGN.md](docs/DESIGN.md) for the full IPC surface, DB schema, and bu
 
 - [docs/AUDIT.md](docs/AUDIT.md) — what was cut from the original spec and why.
 - [docs/DESIGN.md](docs/DESIGN.md) — architecture, DB schema, IPC surface, build order.
+- [docs/ORCHESTRATION.md](docs/ORCHESTRATION.md) — task delegation across accounts (operator → workers) with progress preservation: architecture, current status, and the pending MCP layer.
 
 ## Contributing
 

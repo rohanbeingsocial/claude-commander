@@ -76,6 +76,11 @@ pub struct Instance {
     pub account_name: String,
     pub project_name: Option<String>,
     pub mode: String,
+    /// Operator mode: this instance delegates the work it's given to worker accounts.
+    pub is_orchestrator: bool,
+    pub worker_pool: Vec<i64>,
+    /// When operator, also let it use its own subagents (off by default = delegate only).
+    pub use_own_agents: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -97,6 +102,62 @@ pub struct Task {
     pub completed_at: Option<String>,
     pub workspace_dir: Option<String>,
     pub files: Vec<String>,
+}
+
+/// A subtask delegated by an orchestrator instance to a worker Claude running under a
+/// (usually different) account. See docs/ORCHESTRATION.md.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkerTask {
+    pub id: i64,
+    pub orchestrator_instance_id: Option<i64>,
+    pub account_id: i64,
+    pub account_name: String,
+    pub model: Option<String>,
+    pub prompt: String,
+    pub cwd: String,
+    pub folder: String,
+    /// running | done | paused_at_limit | failed | stopped
+    pub status: String,
+    pub session_id: Option<String>,
+    pub limit_kind: Option<String>,
+    pub frees_at: Option<String>,
+    pub exit_code: Option<i64>,
+    pub result_summary: Option<String>,
+    pub reassigned_to: Option<i64>,
+    pub created_at: String,
+    pub ended_at: Option<String>,
+}
+
+/// Everything the orchestrator needs to know when a worker stops — always produced, so a
+/// worker never dies silently. `progress` is the worker's own `progress.md`, or a summary
+/// distilled from its output stream when the checkpoint is missing/stale.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClosureReport {
+    pub worker: WorkerTask,
+    pub progress: String,
+    /// "checkpoint" | "distilled" | "none"
+    pub progress_source: String,
+    pub result: Option<String>,
+    pub diff: String,
+    pub resume_handle: Option<String>,
+    pub frees_at: Option<String>,
+}
+
+/// Real 5-hour / 7-day usage for an account, read from Claude Code's own status-line
+/// payload (the tap file), not Commander's token estimate.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkerUsage {
+    pub account_id: i64,
+    pub name: String,
+    pub five_hour_pct: Option<f64>,
+    pub five_hour_resets_at: Option<String>,
+    pub seven_day_pct: Option<f64>,
+    pub seven_day_resets_at: Option<String>,
+    /// "live" when real numbers were available, otherwise "none"
+    pub source: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

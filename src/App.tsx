@@ -14,12 +14,14 @@ import Dashboard from "./views/Dashboard";
 import Projects from "./views/Projects";
 import SettingsView from "./views/SettingsView";
 import TerminalGrid from "./views/TerminalGrid";
+import WorkersView from "./views/WorkersView";
 
 const NAV: { view: View; label: string; icon: string; kbd: string }[] = [
   { view: "terminals", label: "Terminals", icon: "▦", kbd: "1" },
   { view: "accounts", label: "Accounts", icon: "◉", kbd: "2" },
   { view: "projects", label: "Projects", icon: "❏", kbd: "3" },
-  { view: "settings", label: "Settings", icon: "⚙", kbd: "4" },
+  { view: "workers", label: "Workers", icon: "⚡", kbd: "4" },
+  { view: "settings", label: "Settings", icon: "⚙", kbd: "5" },
 ];
 
 const SIDEBAR_WIDTH = { expanded: 240, icons: 56, hidden: 0 } as const;
@@ -61,6 +63,7 @@ export default function App() {
         s.setLimitPrompt(null);
       }),
       listen<ToastEv>("toast", (e) => useStore.getState().toast(e.payload.level, e.payload.message)),
+      listen("workers-updated", () => useStore.getState().refreshWorkers()),
     ];
 
     const onKey = (ev: KeyboardEvent) => {
@@ -75,9 +78,12 @@ export default function App() {
       } else if (ev.key === "n" || ev.key === "N") {
         s.openLaunch();
         ev.preventDefault();
-      } else if (ev.key >= "1" && ev.key <= "4") {
-        s.setView(NAV[Number(ev.key) - 1].view);
-        ev.preventDefault();
+      } else if (ev.key >= "1" && ev.key <= "5") {
+        const nav = NAV[Number(ev.key) - 1];
+        if (nav) {
+          s.setView(nav.view);
+          ev.preventDefault();
+        }
       }
     };
     window.addEventListener("keydown", onKey);
@@ -108,7 +114,7 @@ export default function App() {
 
   const running = instances.filter((i) => i.status === "running").length;
   const collapsed = sidebarMode === "icons";
-  const sidebarW = SIDEBAR_WIDTH[sidebarMode];
+  const sidebarW = SIDEBAR_WIDTH[sidebarMode] ?? SIDEBAR_WIDTH.expanded;
   const panelW = taskPanelOpen ? taskPanelWidth : 0;
 
   return (
@@ -165,6 +171,7 @@ export default function App() {
         {view === "terminals" && <TerminalGrid />}
         {view === "accounts" && <Dashboard />}
         {view === "projects" && <Projects />}
+        {view === "workers" && <WorkersView />}
         {view === "settings" && <SettingsView />}
       </main>
 

@@ -111,11 +111,37 @@ function TileToolbar({
 }) {
   const refreshInstances = useStore((s) => s.refreshInstances);
   const setActiveInstance = useStore((s) => s.setActiveInstance);
+  const allAccounts = useStore((s) => s.accounts);
   const toast = useStore((s) => s.toast);
   const { open: menu, style: menuStyle, btnRef: menuBtnRef, toggle: toggleMenu, close: closeMenu } = useDropdown();
+  const { open: opMenu, style: opStyle, btnRef: opBtnRef, toggle: toggleOp, close: closeOp } = useDropdown();
   const [recs, setRecs] = useState<Recommendation[]>([]);
   const [busy, setBusy] = useState(false);
   const [, setTick] = useState(0);
+
+  // operator (delegation) settings — seeded from the instance when the popover opens
+  const [opOn, setOpOn] = useState(inst.isOrchestrator);
+  const [opPool, setOpPool] = useState<number[]>(inst.workerPool ?? []);
+  const [opOwnAgents, setOpOwnAgents] = useState(inst.useOwnAgents);
+  useEffect(() => {
+    if (opMenu) {
+      setOpOn(inst.isOrchestrator);
+      setOpPool(inst.workerPool ?? []);
+      setOpOwnAgents(inst.useOwnAgents);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [opMenu]);
+
+  const saveOperator = async () => {
+    try {
+      await ipc.setOperator({ instanceId: inst.id, isOperator: opOn, workerPool: opPool, useOwnAgents: opOwnAgents });
+      await refreshInstances();
+      toast("success", opOn ? `${inst.accountName} is now an operator` : "Operator mode off");
+      closeOp();
+    } catch (e) {
+      toast("error", String(e));
+    }
+  };
 
   useEffect(() => {
     if (!isLive(inst)) return;
@@ -195,6 +221,11 @@ function TileToolbar({
         <span className="dim small ellipsis" title={inst.cwd}>
           · {inst.projectName ?? basename(inst.cwd)}
         </span>
+        {inst.isOrchestrator && (
+          <span className="cell-op" title="Operator — delegates its work to the worker pool">
+            ⚙ OPERATOR
+          </span>
+        )}
         {taskTitle && (
           <span className="cell-task ellipsis" title={`Task: ${taskTitle}`}>
             ◆ {taskTitle}
@@ -224,6 +255,64 @@ function TileToolbar({
             </button>
           </>
         )}
+        <div className="menu-anchor">
+          <button
+            ref={opBtnRef}
+            className={`icon-btn ${inst.isOrchestrator ? "op-on" : ""}`}
+            title="Operator (task delegation) settings"
+            onClick={() => toggleOp()}
+          >
+            ⚙
+          </button>
+          {opMenu && (
+            <>
+              <div
+                className="menu-backdrop"
+                onMouseDown={(e) => {
+                  e.stopPropagation();
+                  closeOp();
+                }}
+              />
+              <div className="menu-pop menu-pop-fixed" style={opStyle} onMouseDown={(e) => e.stopPropagation()}>
+                <div className="menu-sep">Operator</div>
+                <label className="menu-check">
+                  <input type="checkbox" checked={opOn} onChange={(e) => setOpOn(e.target.checked)} />
+                  Operator — delegate the work given to this instance to the accounts below (or itself)
+                </label>
+                {opOn && (
+                  <>
+                    <div className="menu-sep">Delegation accounts</div>
+                    {allAccounts
+                      .filter((a) => a.enabled && a.id !== inst.accountId)
+                      .map((a) => (
+                        <label key={a.id} className="menu-check">
+                          <input
+                            type="checkbox"
+                            checked={opPool.includes(a.id)}
+                            onChange={(e) =>
+                              setOpPool((p) => (e.target.checked ? [...p, a.id] : p.filter((x) => x !== a.id)))
+                            }
+                          />
+                          <span className={`status-dot st-${a.status}`} /> {a.name}
+                          <span className="dim small">5h {Math.min(Math.round(a.fiveHour.pct), 999)}%</span>
+                        </label>
+                      ))}
+                    {allAccounts.filter((a) => a.enabled && a.id !== inst.accountId).length === 0 && (
+                      <div className="menu-note dim small">No other enabled accounts — add one in Settings.</div>
+                    )}
+                    <label className="menu-check">
+                      <input type="checkbox" checked={opOwnAgents} onChange={(e) => setOpOwnAgents(e.target.checked)} />
+                      Use agents within the operator usage pool — also let it use its own subagents
+                    </label>
+                  </>
+                )}
+                <button className="menu-item" onClick={saveOperator}>
+                  Save
+                </button>
+              </div>
+            </>
+          )}
+        </div>
         <button className="icon-btn" title={isMax ? "Restore layout" : "Maximize"} onClick={onToggleMax}>
           {isMax ? "❐" : "▢"}
         </button>

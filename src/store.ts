@@ -9,6 +9,7 @@ import type {
   SidebarMode,
   Task,
   View,
+  WorkerTask,
 } from "./types";
 
 export interface LaunchPreset {
@@ -63,6 +64,7 @@ interface AppStore {
   instances: Instance[];
   tasks: Task[];
   handovers: HandoverRow[];
+  workers: WorkerTask[];
   settings: Record<string, string>;
 
   activeInstanceId: number | null;
@@ -88,9 +90,15 @@ interface AppStore {
   refreshInstances: () => Promise<void>;
   refreshTasks: () => Promise<void>;
   refreshHandovers: () => Promise<void>;
+  refreshWorkers: () => Promise<void>;
   refreshSettings: () => Promise<void>;
   refreshAll: () => Promise<void>;
 }
+
+// bumped from "sidebarMode" so a stale/compact persisted value resets to the normal
+// expanded menu once; user toggles persist under this key afterwards.
+const SIDEBAR_KEY = "sidebarMode.v2";
+const validSidebar = (v: string): SidebarMode => (v === "icons" || v === "hidden" ? v : "expanded");
 
 let toastSeq = 1;
 
@@ -98,15 +106,15 @@ export const useStore = create<AppStore>((set, get) => ({
   view: "terminals",
   setView: (v) => set({ view: v }),
 
-  sidebarMode: (LS.get("sidebarMode", "expanded") as SidebarMode) || "expanded",
+  sidebarMode: validSidebar(LS.get(SIDEBAR_KEY, "expanded")),
   setSidebarMode: (m) => {
-    LS.set("sidebarMode", m);
+    LS.set(SIDEBAR_KEY, m);
     set({ sidebarMode: m });
   },
   cycleSidebar: () => {
     const order: SidebarMode[] = ["expanded", "icons", "hidden"];
     const next = order[(order.indexOf(get().sidebarMode) + 1) % order.length];
-    LS.set("sidebarMode", next);
+    LS.set(SIDEBAR_KEY, next);
     set({ sidebarMode: next });
   },
 
@@ -131,6 +139,7 @@ export const useStore = create<AppStore>((set, get) => ({
   instances: [],
   tasks: [],
   handovers: [],
+  workers: [],
   settings: {},
 
   activeInstanceId: null,
@@ -191,6 +200,13 @@ export const useStore = create<AppStore>((set, get) => ({
       /* non-critical */
     }
   },
+  refreshWorkers: async () => {
+    try {
+      set({ workers: await ipc.listWorkerTasks() });
+    } catch {
+      /* non-critical */
+    }
+  },
   refreshSettings: async () => {
     try {
       set({ settings: await ipc.getSettings() });
@@ -205,6 +221,7 @@ export const useStore = create<AppStore>((set, get) => ({
       get().refreshInstances(),
       get().refreshTasks(),
       get().refreshHandovers(),
+      get().refreshWorkers(),
       get().refreshSettings(),
     ]);
   },

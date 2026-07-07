@@ -17,6 +17,7 @@ fn build_command(
     mode: &str,
     extra_args: &str,
     initial_prompt: Option<&str>,
+    orch: Option<&crate::mcp::OrchestratorLaunch>,
 ) -> CommandBuilder {
     let lower = claude.to_lowercase();
     let mut cmd = if lower.ends_with(".cmd") || lower.ends_with(".bat") {
@@ -39,6 +40,21 @@ fn build_command(
     }
     for a in extra_args.split_whitespace() {
         cmd.arg(a);
+    }
+    // Orchestrator wiring: point Claude at Commander's MCP server, forbid its own Task
+    // subagents (unless opted out), and nudge it to delegate. Passed as dedicated args so a
+    // config path with spaces survives (unlike the whitespace-split extra_args).
+    if let Some(o) = orch {
+        cmd.arg("--mcp-config");
+        cmd.arg(&o.mcp_config_path);
+        if o.disallow_task {
+            cmd.arg("--disallowedTools");
+            cmd.arg("Task");
+        }
+        if !o.system_prompt.is_empty() {
+            cmd.arg("--append-system-prompt");
+            cmd.arg(&o.system_prompt);
+        }
     }
     if let Some(p) = initial_prompt {
         if !p.trim().is_empty() {
@@ -189,6 +205,7 @@ pub fn spawn_claude(
     mode: &str,
     extra_args: &str,
     initial_prompt: Option<&str>,
+    orch: Option<&crate::mcp::OrchestratorLaunch>,
 ) -> Result<Instance, String> {
     let state = app.state::<AppState>();
     if !Path::new(cwd).is_dir() {
@@ -217,7 +234,7 @@ pub fn spawn_claude(
     let pair = pty_system
         .openpty(PtySize { rows: 30, cols: 110, pixel_width: 0, pixel_height: 0 })
         .map_err(|e| e.to_string())?;
-    let cmd = build_command(&claude, cwd, &config_dir, mode, extra_args, initial_prompt);
+    let cmd = build_command(&claude, cwd, &config_dir, mode, extra_args, initial_prompt, orch);
     let mut child = pair.slave.spawn_command(cmd).map_err(|e| format!("Failed to start claude: {e}"))?;
     drop(pair.slave);
     let killer = child.clone_killer();
@@ -323,12 +340,16 @@ pub fn spawn_claude(
         account_name,
         project_name: None,
         mode: mode.to_string(),
+        is_orchestrator: false,
+        worker_pool: Vec::new(),
+        use_own_agents: false,
     })
 }
 
 // ---- commands ----
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub fn launch_instance(
     app: AppHandle,
     account_id: i64,
@@ -337,8 +358,20 @@ pub fn launch_instance(
     mode: Option<String>,
     extra_args: Option<String>,
     initial_prompt: Option<String>,
+    is_orchestrator: Option<bool>,
+    worker_pool: Option<Vec<i64>>,
+    use_own_agents: Option<bool>,
 ) -> Result<Instance, String> {
-    spawn_claude(
+    // For an orchestrator, mint the MCP config *before* spawning so the launch command can
+    // point Claude at Commander's server and (by default) forbid its own Task subagents.
+    let use_own_agents = use_own_agents == Some(true);
+    let prepared = if is_orchestrator == Some(true) {
+        Some(crate::mcp::prepare_orchestrator(&app, use_own_agents)?)
+    } else {
+        None
+    };
+
+    let mut inst = spawn_claude(
         &app,
         account_id,
         project_id,
@@ -346,7 +379,27 @@ pub fn launch_instance(
         mode.as_deref().unwrap_or("new"),
         extra_args.as_deref().unwrap_or(""),
         initial_prompt.as_deref(),
-    )
+        prepared.as_ref().map(|(_, o)| o),
+    )?;
+
+    if let Some((token, _)) = prepared {
+        let pool = worker_pool.unwrap_or_default();
+        let pool_json = serde_json::to_string(&pool).unwrap_or_else(|_| "[]".into());
+        {
+            let state = app.state::<AppState>();
+            let conn = state.db.lock().unwrap();
+            let _ = conn.execute(
+                "UPDATE instances SET is_orchestrator=1, worker_pool=?1, use_own_agents=?2 WHERE id=?3",
+                params![pool_json, if use_own_agents { 1 } else { 0 }, inst.id],
+            );
+        }
+        // now that the row (and thus id) exists, bind the token to this orchestrator
+        crate::mcp::register(&app, &token, inst.id);
+        inst.is_orchestrator = true;
+        inst.worker_pool = pool;
+        inst.use_own_agents = use_own_agents;
+    }
+    Ok(inst)
 }
 
 #[tauri::command]
@@ -371,12 +424,14 @@ pub fn resize_pty(state: State<'_, AppState>, instance_id: i64, rows: u16, cols:
 #[tauri::command]
 pub fn kill_instance(app: AppHandle, instance_id: i64) -> Result<(), String> {
     kill_pty(&app, instance_id);
+    crate::mcp::unregister_instance(&app, instance_id);
     Ok(())
 }
 
 #[tauri::command]
 pub fn close_instance(app: AppHandle, instance_id: i64) -> Result<(), String> {
     kill_pty(&app, instance_id);
+    crate::mcp::unregister_instance(&app, instance_id);
     let state = app.state::<AppState>();
     let conn = state.db.lock().unwrap();
     conn.execute("UPDATE instances SET archived=1 WHERE id=?1", [instance_id])
@@ -389,7 +444,7 @@ pub fn list_instances(state: State<'_, AppState>) -> Result<Vec<Instance>, Strin
     let conn = state.db.lock().unwrap();
     let mut stmt = conn
         .prepare(
-            "SELECT i.id, i.account_id, i.project_id, i.cwd, i.mode, i.session_id, i.status, i.exit_code, i.started_at, i.ended_at, a.name, p.name
+            "SELECT i.id, i.account_id, i.project_id, i.cwd, i.mode, i.session_id, i.status, i.exit_code, i.started_at, i.ended_at, a.name, p.name, i.is_orchestrator, i.worker_pool, i.use_own_agents
              FROM instances i
              JOIN accounts a ON a.id=i.account_id
              LEFT JOIN projects p ON p.id=i.project_id
@@ -413,6 +468,12 @@ pub fn list_instances(state: State<'_, AppState>) -> Result<Vec<Instance>, Strin
                 ended_at: r.get(9)?,
                 account_name: r.get(10)?,
                 project_name: r.get(11)?,
+                is_orchestrator: r.get::<_, i64>(12)? != 0,
+                worker_pool: r
+                    .get::<_, Option<String>>(13)?
+                    .and_then(|s| serde_json::from_str::<Vec<i64>>(&s).ok())
+                    .unwrap_or_default(),
+                use_own_agents: r.get::<_, i64>(14)? != 0,
             })
         })
         .map_err(|e| e.to_string())?;

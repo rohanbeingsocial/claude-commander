@@ -213,7 +213,7 @@ pub fn start_task(app: AppHandle, task_id: i64, account_id: i64) -> Result<Insta
         (row.0, row.1, row.2, row.3, files)
     };
     let (dir, prompt) = make_workspace(&root, task_id, &title, &description, &files)?;
-    let inst = crate::pty::spawn_claude(&app, account_id, Some(project_id), &root, "new", "", Some(&prompt))?;
+    let inst = crate::pty::spawn_claude(&app, account_id, Some(project_id), &root, "new", "", Some(&prompt), None)?;
     {
         let conn = state.db.lock().unwrap();
         let _ = conn.execute(

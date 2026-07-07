@@ -56,6 +56,9 @@ export interface Instance {
   accountName: string;
   projectName: string | null;
   mode: string;
+  isOrchestrator: boolean;
+  workerPool: number[];
+  useOwnAgents: boolean;
 }
 
 export interface Task {
@@ -89,6 +92,54 @@ export interface Recommendation {
   score: number;
   reason: string;
   status: string;
+}
+
+/** A subtask delegated by an orchestrator to a worker account. See docs/ORCHESTRATION.md. */
+export interface WorkerTask {
+  id: number;
+  orchestratorInstanceId: number | null;
+  accountId: number;
+  accountName: string;
+  model: string | null;
+  prompt: string;
+  cwd: string;
+  folder: string;
+  status: string; // running | done | paused_at_limit | failed | stopped
+  sessionId: string | null;
+  limitKind: string | null;
+  freesAt: string | null;
+  exitCode: number | null;
+  resultSummary: string | null;
+  reassignedTo: number | null;
+  createdAt: string;
+  endedAt: string | null;
+}
+
+export interface ClosureReport {
+  worker: WorkerTask;
+  progress: string;
+  progressSource: string; // "checkpoint" | "distilled" | "none"
+  result: string | null;
+  diff: string;
+  resumeHandle: string | null;
+  freesAt: string | null;
+}
+
+export interface McpStatus {
+  running: boolean;
+  port: number;
+  url: string;
+  orchestrators: number;
+}
+
+export interface WorkerUsage {
+  accountId: number;
+  name: string;
+  fiveHourPct: number | null;
+  fiveHourResetsAt: string | null;
+  sevenDayPct: number | null;
+  sevenDayResetsAt: string | null;
+  source: string; // "live" | "none"
 }
 
 export interface HandoverRow {
@@ -132,7 +183,7 @@ export interface FsEntry {
   isDir: boolean;
 }
 
-export type View = "terminals" | "accounts" | "projects" | "settings";
+export type View = "terminals" | "accounts" | "projects" | "workers" | "settings";
 export type SidebarMode = "expanded" | "icons" | "hidden";
 
 /** react-dnd item type for dragging a file from the explorer onto a task. */
