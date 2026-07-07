@@ -57,7 +57,7 @@ no telemetry — everything stays on your machine.
 |---|---|
 | 🖥️ **Terminal grid** | Auto-tiling grid of real Claude terminals (ConPTY + xterm.js) for 1, 2, 4, 6, 8+ instances. Maximize/restore panes; per-pane action menu. |
 | 📊 **Live usage meters** | Every terminal header shows that account's **5-hour %** and **weekly %** as mini meters — usage always visible, never behind a menu. |
-| 👥 **Multi-account** | Auto-discovers accounts from `~\.claude` + `~\.claude-accounts\*`; each instance runs under its own `CLAUDE_CONFIG_DIR`. |
+| 👥 **Multi-account** | Auto-discovers accounts from `~\.claude` + `~\.claude-accounts\*`; each instance runs under its own `CLAUDE_CONFIG_DIR`. **＋ Add account** in Settings creates a fresh login slot in one click — no hand-made folders. |
 | 📋 **Task board** | Permanent, resizable panel. Quick-add tasks, drag `.md` files to link them, **Assign ▾** to inject a task into a running Claude. You control completion. |
 | 🔁 **Failover** | On a usage-limit message, copies the session transcript to another account and relaunches with `--resume` — zero context loss. |
 | 🧠 **Project memory** | Auto-maintained `.project-memory\*.md` (summary, architecture, decisions, todos, handover, session-log) folded into handovers. |
@@ -70,38 +70,65 @@ no telemetry — everything stays on your machine.
 
 ## Install & build (from source)
 
-Claude Commander is a native desktop app (Tauri = a Rust binary + a web UI), so you
-build it once from source rather than installing it from a package registry.
+Claude Commander is a native desktop app (Tauri = a Rust binary + a web UI). There are no
+prebuilt binaries yet — you build it once from source, then run the `.exe`. It takes about
+10 minutes end-to-end on a first build (Rust compiles a lot the first time; later builds
+are fast). Windows 10/11 (64-bit) only for now.
 
-### Prerequisites
+### 1. Install the prerequisites
 
-- **[Node.js](https://nodejs.org/) 18+** and npm
-- **[Rust](https://www.rust-lang.org/tools/install) (stable)** — `rustup` toolchain
-- **[Tauri 2 Windows prerequisites](https://v2.tauri.app/start/prerequisites/)** —
-  Microsoft C++ Build Tools and WebView2 (WebView2 ships with Windows 11)
-- **[Claude Code](https://docs.anthropic.com/en/docs/claude-code)** installed and on your
-  `PATH` (the app launches `claude` for you)
+| Need | How | Verify |
+|---|---|---|
+| **Node.js 18+** (includes npm) | [nodejs.org](https://nodejs.org/) → LTS installer | `node -v` |
+| **Rust (stable)** | [rustup.rs](https://www.rust-lang.org/tools/install) → run `rustup-init.exe`, accept defaults | `cargo --version` |
+| **MS C++ Build Tools** | [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) → check **"Desktop development with C++"** | (linker used by `cargo`) |
+| **WebView2 runtime** | Ships with Windows 11; on Windows 10 grab the [Evergreen runtime](https://developer.microsoft.com/microsoft-edge/webview2/) | Edge installed = present |
+| **Claude Code** | [Install guide](https://docs.anthropic.com/en/docs/claude-code) — must be on your `PATH` | `claude --version` |
 
-### Build
+> Full details for the native toolchain: [Tauri 2 Windows prerequisites](https://v2.tauri.app/start/prerequisites/).
+> The one people miss is the **C++ Build Tools** — without them `cargo` can't link and the
+> build fails at the very end.
+
+### 2. Clone & build
 
 ```bash
 git clone https://github.com/rohanbeingsocial/claude-commander.git
 cd claude-commander
-npm install
-npm run tauri build          # release build → src-tauri\target\release\claude-commander.exe
+npm install                  # frontend deps (fast)
+npm run tauri build          # compiles the Rust core + UI → a single .exe
 ```
 
-Add `--bundle nsis` to produce a Windows installer, or `--no-bundle` for just the `.exe`.
+The result lands at:
 
-### Run it
+- **Installer:** `src-tauri\target\release\bundle\nsis\Claude Commander_0.1.0_x64-setup.exe`
+- **Portable exe:** `src-tauri\target\release\claude-commander.exe`
 
-Double-click `src-tauri\target\release\claude-commander.exe` (or pin it to the taskbar).
+Run the installer for Start-menu/taskbar integration, or just double-click the portable
+`.exe`. (`npm run tauri build -- --no-bundle` skips the installer and only produces the
+`.exe`.)
 
-### Develop
+### 3. Run it
+
+Launch **Claude Commander** from the Start menu (if you ran the installer) or double-click
+`claude-commander.exe`. On first run it auto-discovers your Claude accounts — see
+[First run](#first-run) below.
+
+### Develop (hot-reload)
 
 ```bash
-npm run tauri dev            # hot-reloading dev build
+npm run tauri dev            # hot-reloading dev build; changes to the UI reload live
 ```
+
+### Troubleshooting the build
+
+- **`link.exe not found` / linker errors** — the C++ Build Tools aren't installed (or you
+  didn't tick "Desktop development with C++"). Install them, then reopen your terminal.
+- **`cargo` not recognized** — restart your terminal after installing Rust so `PATH`
+  picks up `~/.cargo/bin`.
+- **App opens but terminals say `claude` not found** — Claude Code isn't on `PATH`. Fix
+  your `PATH`, or set the exact path in **Settings → Claude executable → Browse…**.
+- **First build is slow** — normal; Rust compiles all dependencies once. Subsequent builds
+  reuse the cache and take seconds.
 
 ---
 
@@ -110,6 +137,12 @@ npm run tauri dev            # hot-reloading dev build
 1. **Accounts** are auto-discovered from `~\.claude` (shown as **Main**) and every folder
    in `~\.claude-accounts\*` — the same config dirs your `cc`/`ccw` scripts use. Instances
    launch with `CLAUDE_CONFIG_DIR` pointed at the chosen account.
+   - **Adding another account (e.g. a fresh machine):** open **Settings → Accounts** and
+     click **＋ Add account**. That creates an empty config slot under
+     `~\.claude-accounts\<n>`; launch a Claude instance on it (**+ New Claude**) and sign in
+     when Claude Code prompts. You now have a second account running in the grid — no need to
+     create folders by hand and re-scan. **Add folder…** registers a config dir you already
+     have, and **Re-discover** re-scans for any added outside Commander.
 2. **Usage history** is parsed from each account's session transcripts on first scan
    (~seconds). Numbers sharpen as budgets calibrate (see below).
 3. **Projects** — add your repos in the Projects view (folder picker). Worktrees are
@@ -177,6 +210,14 @@ links, projects and worktrees all persist.
 | Ctrl+B | Cycle sidebar: expanded → icons → hidden |
 | Ctrl+J | Toggle the task panel |
 | Ctrl+N | New Claude instance |
+| Ctrl+V · Ctrl+Shift+V · Shift+Insert | Paste into the focused terminal |
+| Ctrl+Shift+C | Copy the terminal selection |
+| Ctrl+C | Copy when text is selected, otherwise send interrupt (^C) |
+| Right-click | Copy the selection if any, otherwise paste |
+
+Terminal copy/paste goes through the OS clipboard directly (Tauri's clipboard layer), so it
+works reliably inside the WebView — and paste respects Claude Code's bracketed-paste mode,
+so multi-line pastes land intact.
 
 ---
 

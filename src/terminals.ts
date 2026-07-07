@@ -1,9 +1,39 @@
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { listen } from "@tauri-apps/api/event";
+import { readText as clipReadText, writeText as clipWriteText } from "@tauri-apps/plugin-clipboard-manager";
 import { ipc } from "./ipc";
 import { b64decode, b64encodeText } from "./util";
 import type { PtyOutEv } from "./types";
+
+/** Read the OS clipboard. Prefers the Tauri clipboard plugin (works reliably in
+ *  WebView2, where navigator.clipboard.readText() is blocked by default); falls
+ *  back to the browser API if the plugin call fails. */
+async function readClipboard(): Promise<string> {
+  try {
+    return (await clipReadText()) ?? "";
+  } catch {
+    try {
+      return await navigator.clipboard.readText();
+    } catch {
+      return "";
+    }
+  }
+}
+
+/** Write text to the OS clipboard, with the same plugin-first strategy. */
+async function writeClipboard(text: string): Promise<void> {
+  try {
+    await clipWriteText(text);
+    return;
+  } catch {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      /* clipboard write blocked */
+    }
+  }
+}
 
 interface Entry {
   term: Terminal;
@@ -38,12 +68,7 @@ export async function initPtyRouting(): Promise<void> {
 async function pasteInto(instanceId: number): Promise<void> {
   const e = terms.get(instanceId);
   if (!e) return;
-  let text = "";
-  try {
-    text = await navigator.clipboard.readText();
-  } catch {
-    /* clipboard read blocked */
-  }
+  const text = await readClipboard();
   if (text) e.term.paste(text);
 }
 
@@ -52,11 +77,7 @@ async function copySelection(instanceId: number): Promise<void> {
   if (!e) return;
   const sel = e.term.getSelection();
   if (!sel) return;
-  try {
-    await navigator.clipboard.writeText(sel);
-  } catch {
-    /* clipboard write blocked */
-  }
+  await writeClipboard(sel);
 }
 
 function ensureEntry(instanceId: number): Entry {

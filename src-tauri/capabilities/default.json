@@ -2,5 +2,10 @@
   "identifier": "default",
   "description": "Main window capabilities",
   "windows": ["main"],
-  "permissions": ["core:default", "dialog:default"]
+  "permissions": [
+    "core:default",
+    "dialog:default",
+    "clipboard-manager:allow-read-text",
+    "clipboard-manager:allow-write-text"
+  ]
 }

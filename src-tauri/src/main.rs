@@ -23,6 +23,7 @@ use tauri::{Emitter, Manager};
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
@@ -82,6 +83,7 @@ fn main() {
             accounts::discover_accounts,
             accounts::update_account,
             accounts::add_account,
+            accounts::create_account,
             accounts::remove_account,
             accounts::rescan_usage,
             projects::list_projects,

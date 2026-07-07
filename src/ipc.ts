@@ -24,6 +24,9 @@ export const ipc = {
     enabled?: boolean;
     clearLimit?: boolean;
   }) => invoke<void>("update_account", args),
+  addAccount: (path: string, name: string) => invoke<void>("add_account", { path, name }),
+  createAccount: (name?: string) =>
+    invoke<{ id: number; name: string; configDir: string }>("create_account", { name }),
   removeAccount: (accountId: number) => invoke<void>("remove_account", { accountId }),
   rescanUsage: () => invoke<AccountUsage[]>("rescan_usage"),
 

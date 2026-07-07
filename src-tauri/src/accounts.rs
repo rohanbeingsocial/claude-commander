@@ -174,6 +174,41 @@ pub fn add_account(state: State<'_, AppState>, path: String, name: String) -> Re
     Ok(())
 }
 
+/// Create a brand-new, empty account config dir under ~/.claude-accounts/<n>
+/// and register it. Launching a Claude instance on it triggers a fresh login,
+/// so you can run another Claude account without hand-creating folders first.
+#[tauri::command]
+pub fn create_account(state: State<'_, AppState>, name: Option<String>) -> Result<Account, String> {
+    let home = dirs::home_dir().ok_or("cannot resolve home directory")?;
+    let base = home.join(".claude-accounts");
+    fs::create_dir_all(&base).map_err(|e| e.to_string())?;
+    // pick the lowest free numeric slot so it lines up with the cc/ccw scripts
+    let mut n = 1u32;
+    let dir = loop {
+        let cand = base.join(n.to_string());
+        if !cand.exists() {
+            break cand;
+        }
+        n += 1;
+    };
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let cfg = dir.to_string_lossy().to_string();
+    let label = name
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| format!("Account {n}"));
+    let conn = state.db.lock().unwrap();
+    conn.execute(
+        "INSERT INTO accounts(name, config_dir) VALUES(?1,?2) ON CONFLICT(config_dir) DO UPDATE SET name=excluded.name",
+        params![label, cfg],
+    )
+    .map_err(|e| e.to_string())?;
+    let id: i64 = conn
+        .query_row("SELECT id FROM accounts WHERE config_dir=?1", [&cfg], |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+    get(&conn, id)
+}
+
 #[tauri::command]
 pub fn remove_account(state: State<'_, AppState>, account_id: i64) -> Result<(), String> {
     let conn = state.db.lock().unwrap();

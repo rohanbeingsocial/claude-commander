@@ -55,6 +55,18 @@ function AccountRow({ account }: { account: AccountUsage }) {
     }
   };
 
+  const remove = async () => {
+    if (!confirm(`Remove "${account.name}" from Commander?\n\nThis only unregisters it here — the config folder and its login are left untouched.`))
+      return;
+    try {
+      await ipc.removeAccount(account.id);
+      await refreshAccounts();
+      toast("success", `${account.name} removed`);
+    } catch (e) {
+      toast("error", String(e));
+    }
+  };
+
   return (
     <div className="card acct-edit-row">
       <div className="row wrap">
@@ -77,6 +89,9 @@ function AccountRow({ account }: { account: AccountUsage }) {
         </label>
         <button className="btn btn-sm" onClick={save} disabled={saving}>
           Save
+        </button>
+        <button className="btn btn-sm btn-ghost" onClick={remove} title="Remove this account from Commander">
+          Remove
         </button>
       </div>
       <div className="dim small ellipsis" title={account.configDir}>
@@ -152,6 +167,32 @@ export default function SettingsView() {
     }
   };
 
+  const createAccount = async () => {
+    try {
+      const acct = await ipc.createAccount();
+      await refreshAccounts();
+      toast(
+        "success",
+        `Created "${acct.name}". Launch a Claude instance on it (+ New Claude) and sign in to run a second account.`,
+      );
+    } catch (e) {
+      toast("error", String(e));
+    }
+  };
+
+  const addFolder = async () => {
+    const dir = await open({ directory: true, title: "Pick an existing Claude config folder (contains .claude.json)" });
+    if (typeof dir !== "string") return;
+    try {
+      const name = dir.split(/[\\/]/).filter(Boolean).pop() || "Account";
+      await ipc.addAccount(dir, name);
+      await refreshAccounts();
+      toast("success", `Added account from ${dir}`);
+    } catch (e) {
+      toast("error", String(e));
+    }
+  };
+
   return (
     <div className="view">
       <div className="view-head">
@@ -219,9 +260,23 @@ export default function SettingsView() {
       <div className="card settings-card">
         <div className="row" style={{ justifyContent: "space-between" }}>
           <h3>Accounts &amp; budgets</h3>
-          <button className="btn btn-sm" onClick={discover}>
-            Re-discover accounts
-          </button>
+          <div className="row">
+            <button className="btn btn-sm btn-primary" onClick={createAccount} title="Create a fresh, empty account slot to sign a new Claude account into">
+              ＋ Add account
+            </button>
+            <button className="btn btn-sm" onClick={addFolder} title="Register an existing Claude config folder">
+              Add folder…
+            </button>
+            <button className="btn btn-sm" onClick={discover} title="Scan ~/.claude and ~/.claude-accounts/* for accounts">
+              Re-discover
+            </button>
+          </div>
+        </div>
+        <div className="info-box dim small">
+          <strong>Run multiple Claude accounts:</strong> click <strong>＋ Add account</strong> to create a fresh
+          config slot under <code>~/.claude-accounts</code>, then launch a Claude instance on it (<strong>+ New Claude</strong>)
+          and sign in — no need to hand-create folders. <strong>Add folder…</strong> registers a config dir you already
+          have; <strong>Re-discover</strong> re-scans for any added outside Commander.
         </div>
         <div className="info-box dim small">
           Anthropic exposes no local usage API, so percentages are <strong>estimates</strong>. Usage is measured in{" "}
