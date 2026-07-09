@@ -355,6 +355,6 @@ mod tests {
     #[test]
     fn sanitize_matches_claude_encoding() {
         assert_eq!(sanitize_path("D:\\All Coding stuff\\os"), "D--All-Coding-stuff-os");
-        assert_eq!(sanitize_path("C:\\Users\\rohan\\proj.x"), "C--Users-rohan-proj-x");
+        assert_eq!(sanitize_path("C:\\Users\\alice\\proj.x"), "C--Users-alice-proj-x");
     }
 }

@@ -24,7 +24,7 @@ accounts with zero context loss.
 └────────────────────────────────────────────────────────────────────────────────────┘
         │                                   │                          │
         ▼                                   ▼                          ▼
-  %APPDATA%\com.rohan.claudecommander  C:\Users\rohan\.claude*   claude.exe (ConPTY)
+  %APPDATA%\com.rohan.claudecommander  %USERPROFILE%\.claude*   claude.exe (ConPTY)
   └─ commander.db                      └─ projects\<dir>\*.jsonl  one per instance,
                                           (read-only usage source; CLAUDE_CONFIG_DIR
                                           failover copies one file) per account

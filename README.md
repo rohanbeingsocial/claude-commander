@@ -21,13 +21,27 @@ limit never loses progress.
 Built with **Tauri 2 (Rust) + React + SQLite + xterm.js/ConPTY**. No Electron, no cloud,
 no telemetry — everything stays on your machine.
 
+**Highlights**
+
+- 📊 **Usage always on screen** — every terminal header shows that account's live 5-hour %
+  and weekly % as mini meters. No menu-diving to know where you stand.
+- 🔁 **Zero-context-loss failover** — an account hits its limit and the session (transcript
+  and all) moves to another account and resumes mid-conversation.
+- 🕹️ **Operator → workers over MCP** — type work into one Claude and it delegates subtasks
+  to headless workers on your other accounts through a built-in, loopback-only MCP server.
+- ⏰ **Auto-wake** — a limit-stuck session relaunches itself the moment its window resets,
+  so overnight runs pick themselves back up unattended.
+- 🛟 **Nothing gets lost** — crashed app? Workers are reconciled at boot and re-adoptable.
+  Rebooted? The grid comes back as resumable cells. Limit mid-task? Progress, diff, and a
+  resume handle survive.
+
 ---
 
 ## Contents
 
 - [What it looks like](#what-it-looks-like)
 - [Feature overview](#feature-overview)
-- [Install & build](#install--build-from-source)
+- [Install](#install)
 - [First run](#first-run)
 - [Task delegation (Operator mode)](#task-delegation-operator-mode)
 - [Features in depth](#features-in-depth)
@@ -36,6 +50,7 @@ no telemetry — everything stays on your machine.
 - [How usage estimation works](#how-usage-estimation-works-fallback-honest-version)
 - [Architecture](#architecture)
 - [Data & safety](#data--safety)
+- [Roadmap](#roadmap)
 - [Docs · Contributing · License](#docs)
 
 ---
@@ -65,8 +80,12 @@ no telemetry — everything stays on your machine.
 | 📊 **Live usage meters** | Every terminal header shows that account's **5-hour %** and **weekly %** as mini meters — usage always visible, never behind a menu. |
 | 👥 **Multi-account** | Auto-discovers accounts from `~\.claude` + `~\.claude-accounts\*`; each instance runs under its own `CLAUDE_CONFIG_DIR`. **＋ Add account** in Settings creates a fresh login slot in one click — no hand-made folders. |
 | 📋 **Task board** | Permanent, resizable panel. Quick-add tasks, drag `.md` files to link them, **Assign ▾** to inject a task into a running Claude. You control completion. |
-| 🕹️ **Task delegation** | Run a Claude as an **Operator** that delegates subtasks to worker accounts (headless `claude -p`). Work spreads across accounts; a limit-hit worker keeps its progress and is resumable or reassignable. **Workers** tab + per-pane ⚙ operator settings. |
-| 🔁 **Failover** | On a usage-limit message, copies the session transcript to another account and relaunches with `--resume` — zero context loss. |
+| 🕹️ **Task delegation** | Run a Claude as an **Operator** that delegates subtasks to worker accounts (headless `claude -p`) — hands-on from the **Workers** tab, or hands-off via the built-in **local MCP server** (`delegate`, `poll`, `collect`, …). A limit-hit worker keeps its progress and is resumable or reassignable. |
+| 🔁 **Failover** | On a usage-limit message, copies the session transcript to another account and relaunches with `--resume` — zero context loss. An operator's orchestrator role (MCP token + worker pool + running workers) survives the move. |
+| ⏰ **Auto-wake** | Opt-in: a session stuck at its usage limit relaunches itself (`--continue` + a nudge prompt) the moment the window resets — unattended machines pick work back up on their own. |
+| 🛟 **Crash recovery** | Worker bookkeeping is reconciled at boot after a crash, and a relaunched operator can **adopt** orphaned workers (and their progress) instead of losing them. |
+| 📁 **File explorer** | Sidebar file tree with a **root switcher** (any registered project, the active terminal's folder, or a custom folder), a ⟳ refresh that doesn't collapse the tree, and drag-any-file-onto-a-task linking. |
+| 💻 **Plain terminals** | Launch a plain PowerShell pane into the same grid, with the chosen account's `CLAUDE_CONFIG_DIR` preloaded — for git, builds, and quick checks beside your Claudes. |
 | 🧠 **Project memory** | Auto-maintained `.project-memory\*.md` (summary, architecture, decisions, todos, handover, session-log) folded into handovers. |
 | 🌿 **Worktrees** | Create / launch / remove git worktrees under `<repo>-worktrees\<branch>` straight from the UI. |
 | 💾 **Session recovery** | The grid is persisted (SQLite). After a crash/reboot, terminals reappear as **Resume** cells (`claude --continue`). |
@@ -75,14 +94,28 @@ no telemetry — everything stays on your machine.
 
 ---
 
-## Install & build (from source)
+## Install
 
-Claude Commander is a native desktop app (Tauri = a Rust binary + a web UI). There are no
-prebuilt binaries yet — you build it once from source, then run the `.exe`. It takes about
-10 minutes end-to-end on a first build (Rust compiles a lot the first time; later builds
-are fast). Windows 10/11 (64-bit) only for now.
+Windows 10/11 (64-bit) only for now — **macOS is on the roadmap**.
 
-### 1. Install the prerequisites
+### Option A — download the installer (fastest)
+
+Grab the latest `Claude Commander_<version>_x64-setup.exe` from
+[**Releases**](https://github.com/rohanbeingsocial/claude-commander/releases) and run it.
+You need two things on the machine: [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
+on your `PATH` (`claude --version`) and the WebView2 runtime (ships with Windows 11; on
+Windows 10 grab the [Evergreen runtime](https://developer.microsoft.com/microsoft-edge/webview2/)).
+
+> Windows SmartScreen may warn on first run — the installer isn't code-signed yet. Click
+> **More info → Run anyway**, or build from source below if you'd rather compile it yourself.
+
+### Option B — build from source
+
+Claude Commander is a native desktop app (Tauri = a Rust binary + a web UI). A first build
+takes about 10 minutes end-to-end (Rust compiles a lot the first time; later builds are
+fast).
+
+#### 1. Install the prerequisites
 
 | Need | How | Verify |
 |---|---|---|
@@ -96,7 +129,7 @@ are fast). Windows 10/11 (64-bit) only for now.
 > The one people miss is the **C++ Build Tools** — without them `cargo` can't link and the
 > build fails at the very end.
 
-### 2. Clone & build
+#### 2. Clone & build
 
 ```bash
 git clone https://github.com/rohanbeingsocial/claude-commander.git
@@ -114,19 +147,19 @@ Run the installer for Start-menu/taskbar integration, or just double-click the p
 `.exe`. (`npm run tauri build -- --no-bundle` skips the installer and only produces the
 `.exe`.)
 
-### 3. Run it
+#### 3. Run it
 
 Launch **Claude Commander** from the Start menu (if you ran the installer) or double-click
 `claude-commander.exe`. On first run it auto-discovers your Claude accounts — see
 [First run](#first-run) below.
 
-### Develop (hot-reload)
+#### Develop (hot-reload)
 
 ```bash
 npm run tauri dev            # hot-reloading dev build; changes to the UI reload live
 ```
 
-### Troubleshooting the build
+#### Troubleshooting the build
 
 - **`link.exe not found` / linker errors** — the C++ Build Tools aren't installed (or you
   didn't tick "Desktop development with C++"). Install them, then reopen your terminal.
@@ -216,10 +249,24 @@ Either way the on-disk changes, `progress.md`, and the resumable session all sur
 work can be continued on the same account after reset, reassigned to another account, or
 picked up by you.
 
-> **Status:** the engine, Workers console, per-pane operator settings, closure reports and
-> reassignment all work today (delegation is driven from the **Workers** tab). Letting an
-> Operator instance *automatically* delegate the work you type into it needs the MCP layer,
-> which is the next milestone — see [docs/ORCHESTRATION.md](docs/ORCHESTRATION.md).
+### The MCP channel (hands-off delegation)
+
+Commander itself runs a **local, loopback-only MCP server**. Every operator instance gets a
+per-session bearer token and a private `--mcp-config`, so you can simply *type work into
+the operator* and it delegates on its own using seven tools: `workers_list`,
+`workers_usage`, `delegate`, `poll`, `collect`, `broadcast_context`, and `adopt_workers`.
+Every call is scoped to that operator's worker pool — nothing is exposed beyond localhost.
+
+Delegation also survives the bad days:
+
+- **Operator hits its limit** → failover carries the orchestrator role along: a fresh MCP
+  token is minted for the successor, the pool is copied over, and the old instance's
+  running workers are re-parented onto it.
+- **Commander crashes mid-run** → worker bookkeeping is reconciled at next boot (a
+  `result.md` on disk means *done*, otherwise *stopped*), and a relaunched operator can
+  call `adopt_workers` to take over orphaned workers and their progress.
+
+Full architecture and guarantees: [docs/ORCHESTRATION.md](docs/ORCHESTRATION.md).
 
 ---
 
@@ -243,6 +290,11 @@ box. Check it yourself and the task strikes through and drops into a searchable
 **Completed** section. You can also **Start** a task, which launches a fresh instance on
 the chosen account with the task pre-loaded.
 
+Each task gets a distinct accent color (card stripe + tint), and an assigned task shows a
+**◆ name chip** in its terminal's header so you always know which pane is doing what.
+Every task also gets a folder — `<repo>\.commander-tasks\<id>-<slug>\{prompt.md, progress.md}` —
+and Claude keeps `progress.md` updated, viewable from the task's Details.
+
 ### 👥 Accounts
 
 One card per account showing status, the 5-hour window with a reset countdown, rolling
@@ -255,7 +307,29 @@ When a terminal prints a usage-limit message, the app marks the account, calibra
 budget from the observed usage, generates a handover, **copies the session transcript into
 the next account's config dir**, and relaunches with `--resume <session-id>`. Context is
 preserved — the same mechanism as `/move`. Auto (default on) or one click from the pane
-menu.
+menu. If the instance was an operator, its orchestrator role moves too — fresh MCP token,
+same worker pool, workers re-parented onto the successor.
+
+### ⏰ Auto-wake
+
+**Settings → Auto-wake on limit reset** (off by default): when a session is stuck at its
+usage limit and wasn't failed over, the background scanner relaunches it on the same
+account with `claude --continue` plus a nudge prompt the moment the window resets.
+Combined with auto-reassign for delegated workers, an unattended machine picks its work
+back up on its own — start something before bed, wake up to it finished.
+
+### 📁 File explorer
+
+A collapsible file tree in the sidebar. Its header is a **root switcher** — flip between
+any registered project, the active terminal's folder, or a custom folder — and the ⟳
+refresh re-reads expanded folders without collapsing the tree. Drag any file onto a task
+to link it as a reference.
+
+### 💻 Plain terminals
+
+The launch modal can spawn a **plain PowerShell pane** instead of a Claude — same grid,
+same per-account context (`CLAUDE_CONFIG_DIR` preloaded), no limit detection. For git,
+test runs, and quick checks right next to the Claude doing the work.
 
 ### 🧠 Project memory
 
@@ -265,7 +339,8 @@ auto-created and folded into handovers. Editable under **Projects → Memory**.
 ### 🌿 Worktrees
 
 Create / launch / remove git worktrees under `<repo>-worktrees\<branch>` directly from the
-Projects view — branch list included, no shell juggling.
+Projects view — branch list included, no shell juggling. Each worktree shows a color dot
+matching its terminal's header stripe, plus chips for the live instances running in it.
 
 ### 💾 Session recovery
 
@@ -379,6 +454,13 @@ See [docs/DESIGN.md](docs/DESIGN.md) for the full IPC surface, DB schema, and bu
 - `claude` processes are ~150–250 MB each (that's Claude Code, not the app).
 
 ---
+
+## Roadmap
+
+- **macOS support** — in progress, next up.
+- Linux support.
+- Signed installers.
+- Smarter delegation scoring (task priority/complexity fields are already stored for it).
 
 ## Docs
 

@@ -4,7 +4,7 @@
   "description": "A local-first operations center for Claude Code on Windows: a live grid of Claude terminals with per-account usage meters, a task board, git-worktree launching, and zero-context-loss handover between accounts. Built with Tauri 2 + React.",
   "type": "module",
   "license": "Apache-2.0",
-  "author": "Rohan Deogaonkar <rohandeogaonkar.9@gmail.com>",
+  "author": "Rohan Deogaonkar",
   "homepage": "https://github.com/rohanbeingsocial/claude-commander#readme",
   "repository": {
     "type": "git",
