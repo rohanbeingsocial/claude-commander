@@ -10,30 +10,45 @@
 **▶ [Try the live demo in your browser](https://rohanbeingsocial.github.io/claude-commander/)** — no install,
 no sign-in: sample accounts and simulated terminals show every flow. Nothing runs and nothing you type goes anywhere.
 
-Think *tmux + Terminator + Claude Code + task manager* in one native window. Launch
-instances into repos and worktrees, watch every account's rate-limit usage live in each
-terminal header, assign tasks (with linked markdown) straight into a running Claude, and
-hand work between accounts when one hits a limit — without losing a single message of
-context.
+## The idea: one agentic workflow, every usage pool you own
 
-It also **delegates tasks across accounts**: run one Claude as an *operator* that farms
-subtasks out to worker Claudes on your other accounts (headless), so heavy work is spread
-across several rate-limit windows instead of draining one — and a worker that hits its
-limit never loses progress.
+An agentic workflow is only as fast as the usage pool it runs in. One Claude on one
+account stalls the moment that account's 5-hour or weekly window fills — no matter how
+good the agent is, the ceiling is the pool. Commander removes that ceiling by running the
+**same workflow across all your accounts at once**:
+
+- An **operator** Claude plans the work and delegates subtasks to headless **worker**
+  Claudes on your other accounts (over Commander's built-in local MCP server) — heavy
+  execution drains many pools a little instead of one pool completely, while the operator
+  itself barely spends tokens.
+- When an account does hit a limit, **failover** moves the live session — transcript and
+  all — to the next account and resumes mid-conversation. **Auto-wake** relaunches
+  limit-stuck sessions the moment their window resets.
+- A worker that stops for any reason **never loses progress** — its diff, progress notes
+  and resume handle survive, and the remainder reassigns to whichever account has headroom.
+
+Your throughput scales with the number of pools, not the size of one. And the delegation
+channel is deliberately model-agnostic: the roadmap is this same operator → worker
+workflow across **different AI models**, not just different Claude accounts.
+
+Around that core: think *tmux + Terminator + Claude Code + task manager* in one native
+window. Launch instances into repos and worktrees, watch every account's rate-limit usage
+live in each terminal header, and assign tasks (with linked markdown) straight into a
+running Claude.
 
 Built with **Tauri 2 (Rust) + React + SQLite + xterm.js/ConPTY**. No Electron, no cloud,
 no telemetry — everything stays on your machine.
 
 **Highlights**
 
-- 📊 **Usage always on screen** — every terminal header shows that account's live 5-hour %
-  and weekly % as mini meters. No menu-diving to know where you stand.
-- 🔁 **Zero-context-loss failover** — an account hits its limit and the session (transcript
-  and all) moves to another account and resumes mid-conversation.
 - 🕹️ **Operator → workers over MCP** — type work into one Claude and it delegates subtasks
   to headless workers on your other accounts through a built-in, loopback-only MCP server.
+- 🔁 **Zero-context-loss failover** — an account hits its limit and the session (transcript
+  and all) moves to another account and resumes mid-conversation.
 - ⏰ **Auto-wake** — a limit-stuck session relaunches itself the moment its window resets,
   so overnight runs pick themselves back up unattended.
+- 📊 **Usage always on screen** — every terminal header shows that account's live 5-hour %
+  and weekly % as mini meters. No menu-diving to know where you stand.
 - 🛟 **Nothing gets lost** — crashed app? Workers are reconciled at boot and re-adoptable.
   Rebooted? The grid comes back as resumable cells. Limit mid-task? Progress, diff, and a
   resume handle survive.
@@ -475,6 +490,9 @@ See [docs/DESIGN.md](docs/DESIGN.md) for the full IPC surface, DB schema, and bu
 
 - **macOS support** — in progress, next up.
 - Linux support.
+- **Multi-model workers** — the same operator → worker workflow across different AI
+  models/CLIs, not just Claude accounts. The MCP delegation channel is model-agnostic by
+  design; workers are just headless processes with a prompt, a folder, and a closure report.
 - Signed installers.
 - Smarter delegation scoring (task priority/complexity fields are already stored for it).
 
