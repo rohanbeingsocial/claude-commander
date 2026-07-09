@@ -2,10 +2,10 @@
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](./LICENSE)
 [![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-24C8DB.svg)](https://tauri.app)
-[![Platform: Windows](https://img.shields.io/badge/platform-Windows-0078D6.svg)]()
+[![Platforms](https://img.shields.io/badge/platform-Windows_%C2%B7_macOS_beta_%C2%B7_Linux_beta-0078D6.svg)]()
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](./CONTRIBUTING.md)
 
-> A local-first **operations center for [Claude Code](https://docs.anthropic.com/en/docs/claude-code)** on Windows — a live grid of Claude terminals with per-account usage meters, a permanent task board, git-worktree launching, and zero-context-loss handover between accounts.
+> A local-first **operations center for [Claude Code](https://docs.anthropic.com/en/docs/claude-code)** — a live grid of Claude terminals with per-account usage meters, a permanent task board, git-worktree launching, and zero-context-loss handover between accounts. Windows-first; **macOS & Linux builds in beta**.
 
 **▶ [Try the live demo in your browser](https://rohanbeingsocial.github.io/claude-commander/)** — no install,
 no sign-in: sample accounts and simulated terminals show every flow. Nothing runs and nothing you type goes anywhere.
@@ -77,6 +77,12 @@ no telemetry — everything stays on your machine.
 
 ## What it looks like
 
+The **terminal grid** — auto-tiling Claude terminals with per-account usage meters in every
+header, the operator badge, the task board, and the file explorer (shown in demo mode —
+[try it yourself](https://rohanbeingsocial.github.io/claude-commander/)):
+
+![Terminal grid — tiled Claude terminals, usage meters, task board](screenshots/grid-demo.png)
+
 The **Accounts** view — one card per account with live 5-hour/weekly meters, reset
 countdowns, prompts-remaining estimates, and a best-pick hint (emails redacted):
 
@@ -125,18 +131,24 @@ And the overall layout:
 
 ## Install
 
-Windows 10/11 (64-bit) only for now — **macOS is on the roadmap**.
+**Windows** is the primary, battle-tested platform. **macOS and Linux builds are in beta** —
+the whole codebase compiles and passes tests on both in CI, and installers ship with every
+release, but they've had little time on real hardware yet. Issue reports are gold.
 
-### Option A — download the installer (fastest)
+Everyone needs [Claude Code](https://docs.anthropic.com/en/docs/claude-code) on `PATH`
+(`claude --version`); if it isn't found, set the exact path in **Settings → Claude executable**.
 
-Grab the latest `Claude Commander_<version>_x64-setup.exe` from
-[**Releases**](https://github.com/rohanbeingsocial/claude-commander/releases) and run it.
-You need two things on the machine: [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
-on your `PATH` (`claude --version`) and the WebView2 runtime (ships with Windows 11; on
-Windows 10 grab the [Evergreen runtime](https://developer.microsoft.com/microsoft-edge/webview2/)).
+### Option A — download an installer (fastest)
 
-> Windows SmartScreen may warn on first run — the installer isn't code-signed yet. Click
-> **More info → Run anyway**, or build from source below if you'd rather compile it yourself.
+Grab the latest build for your OS from
+[**Releases**](https://github.com/rohanbeingsocial/claude-commander/releases):
+
+| OS | Asset | First-run note |
+|---|---|---|
+| **Windows 10/11 x64** | `Claude Commander_<v>_x64-setup.exe` | SmartScreen may warn (unsigned) — **More info → Run anyway**. Needs WebView2 (ships with Win 11; [runtime for Win 10](https://developer.microsoft.com/microsoft-edge/webview2/)). |
+| **macOS — Apple Silicon** *(beta)* | `Claude Commander_<v>_aarch64.dmg` | Unsigned — **right-click the app → Open** the first time (or `xattr -cr "/Applications/Claude Commander.app"`). |
+| **macOS — Intel** *(beta)* | `Claude Commander_<v>_x64.dmg` | Same as above. |
+| **Linux** *(beta)* | `claude-commander_<v>_amd64.AppImage` or `.deb` | `chmod +x` the AppImage; needs WebKitGTK 4.1 (Ubuntu 22.04+). |
 
 > **Just want a look?** Open the **[live web demo](https://rohanbeingsocial.github.io/claude-commander/)** —
 > nothing to install. The installed app has the same thing built in: click **Try demo mode**
@@ -150,6 +162,12 @@ takes about 10 minutes end-to-end (Rust compiles a lot the first time; later bui
 fast).
 
 #### 1. Install the prerequisites
+
+The table below is the **Windows** toolchain. On **macOS** you need the Xcode Command Line
+Tools (`xcode-select --install`) plus Node and Rust; on **Linux**, Node, Rust and the
+WebKitGTK stack: `sudo apt install libwebkit2gtk-4.1-dev build-essential libxdo-dev
+libssl-dev libayatana-appindicator3-dev librsvg2-dev` (see
+[Tauri 2 prerequisites](https://v2.tauri.app/start/prerequisites/) for other distros).
 
 | Need | How | Verify |
 |---|---|---|
@@ -504,8 +522,9 @@ See [docs/DESIGN.md](docs/DESIGN.md) for the full IPC surface, DB schema, and bu
 
 ## Roadmap
 
-- **macOS support** — in progress, next up.
-- Linux support.
+- **macOS & Linux hardening** — beta builds ship with every release (CI-built and tested,
+  unsigned). Terminals, delegation and failover need real-hardware mileage — feedback and
+  issues are very welcome.
 - **Multi-model workers** — the same operator → worker workflow across different AI
   models/CLIs, not just Claude accounts. The MCP delegation channel is model-agnostic by
   design; workers are just headless processes with a prompt, a folder, and a closure report.

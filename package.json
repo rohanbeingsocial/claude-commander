@@ -1,7 +1,7 @@
 {
   "name": "claude-commander",
-  "version": "0.1.0",
-  "description": "A local-first operations center for Claude Code on Windows: a live grid of Claude terminals with per-account usage meters, a task board, git-worktree launching, and zero-context-loss handover between accounts. Built with Tauri 2 + React.",
+  "version": "0.2.0",
+  "description": "A local-first operations center for Claude Code: a live grid of Claude terminals with per-account usage meters, a task board, git-worktree launching, operator-to-worker delegation across accounts, and zero-context-loss handover. Windows-first; macOS/Linux in beta. Tauri 2 + React.",
   "type": "module",
   "license": "Apache-2.0",
   "author": "Rohan Deogaonkar",
