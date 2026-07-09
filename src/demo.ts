@@ -913,6 +913,21 @@ export function makeDemoIpc(real: IpcApi): IpcApi {
       /* nothing to open in demo mode */
     },
 
+    // session warm-up: "open" the 5h window on accounts that don't have one running
+    warmAccounts: async (accountIds) => {
+      let n = 0;
+      for (const id of accountIds) {
+        const a = accounts.find((x) => x.id === id);
+        if (!a || !a.enabled) continue;
+        if (a.limitHitUntilMs && a.limitHitUntilMs > now()) continue;
+        if (a.fiveHourResetMs > now() && a.fiveHourPct > 0) continue; // window already open
+        a.fiveHourResetMs = now() + 5 * HOUR;
+        a.fiveHourPct = Math.max(a.fiveHourPct, 0.5);
+        n++;
+      }
+      return n;
+    },
+
     // usage tap
     installUsageTap: async () => {
       settings.usage_tap = "1";

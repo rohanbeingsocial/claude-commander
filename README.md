@@ -24,6 +24,8 @@ good the agent is, the ceiling is the pool. Commander removes that ceiling by ru
 - When an account does hit a limit, **failover** moves the live session — transcript and
   all — to the next account and resumes mid-conversation. **Auto-wake** relaunches
   limit-stuck sessions the moment their window resets.
+- **Warm-up** opens every account's 5-hour window up front for the price of one throwaway
+  prompt each — timers run (and reset) on your schedule instead of starting mid-task.
 - A worker that stops for any reason **never loses progress** — its diff, progress notes
   and resume handle survive, and the remainder reassigns to whichever account has headroom.
 
@@ -108,6 +110,7 @@ And the overall layout:
 | 🕹️ **Task delegation** | Run a Claude as an **Operator** that delegates subtasks to worker accounts (headless `claude -p`) — hands-on from the **Workers** tab, or hands-off via the built-in **local MCP server** (`delegate`, `poll`, `collect`, …). A limit-hit worker keeps its progress and is resumable or reassignable. |
 | 🔁 **Failover** | On a usage-limit message, copies the session transcript to another account and relaunches with `--resume` — zero context loss. An operator's orchestrator role (MCP token + worker pool + running workers) survives the move. |
 | ⏰ **Auto-wake** | Opt-in: a session stuck at its usage limit relaunches itself (`--continue` + a nudge prompt) the moment the window resets — unattended machines pick work back up on their own. |
+| ⏱️ **Session warm-up** | The 5-hour window only opens on an account's *first message* — so open them all up front: one click (or automatically on every launch) sends a throwaway prompt via headless `claude -p` (haiku) to each enabled account and kills it at the first reply. Every timer running, almost no tokens spent. |
 | 🛟 **Crash recovery** | Worker bookkeeping is reconciled at boot after a crash, and a relaunched operator can **adopt** orphaned workers (and their progress) instead of losing them. |
 | 📁 **File explorer** | Sidebar file tree with a **root switcher** (any registered project, the active terminal's folder, or a custom folder), a ⟳ refresh that doesn't collapse the tree, and drag-any-file-onto-a-task linking. |
 | 💻 **Plain terminals** | Launch a plain PowerShell pane into the same grid, with the chosen account's `CLAUDE_CONFIG_DIR` preloaded — for git, builds, and quick checks beside your Claudes. |
@@ -348,6 +351,19 @@ usage limit and wasn't failed over, the background scanner relaunches it on the 
 account with `claude --continue` plus a nudge prompt the moment the window resets.
 Combined with auto-reassign for delegated workers, an unattended machine picks its work
 back up on its own — start something before bed, wake up to it finished.
+
+### ⏱️ Session warm-up
+
+Claude's 5-hour window opens on an account's **first message** — an untouched account's
+timer doesn't start until you need it, which is exactly the wrong moment. Warm-up opens
+the window early: for each enabled account whose window is closed, Commander runs a
+headless `claude -p` (haiku — the cheapest model), sends a single throwaway prompt, and
+**kills the process the instant the first reply arrives**. A few tokens per account, and
+every timer is running.
+
+Use **Settings → ⏱ Warm up all accounts now**, or turn on **Auto warm-up** to do it
+automatically whenever you launch a Claude. Accounts already in a window, at a limit, or
+warmed in the last 10 minutes are skipped.
 
 ### 📁 File explorer
 

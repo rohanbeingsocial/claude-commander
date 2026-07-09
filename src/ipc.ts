@@ -141,6 +141,9 @@ const real = {
   // real-usage status-line tap
   installUsageTap: () => invoke<number>("install_usage_tap"),
   removeUsageTap: () => invoke<number>("remove_usage_tap"),
+
+  // session warm-up (open the 5h window with a throwaway headless prompt)
+  warmAccounts: (accountIds: number[]) => invoke<number>("warm_accounts", { accountIds }),
 };
 
 export type IpcApi = typeof real;

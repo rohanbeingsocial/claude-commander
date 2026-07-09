@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { open } from "../dialog";
 import { isDemoMode, isWebDemo, setDemoMode } from "../demo";
 import { ipc } from "../ipc";
+import { warmCandidates } from "../warmup";
 import { useStore } from "../store";
 import type { AccountUsage } from "../types";
 import { fmtWeighted } from "../util";
@@ -122,7 +123,27 @@ export default function SettingsView() {
   const autoFailover = settings.auto_failover === "1";
   const autoReassign = settings.auto_reassign === "1";
   const autoWake = settings.auto_wake === "1";
+  const autoWarmup = settings.auto_warmup === "1";
   const usageTap = settings.usage_tap === "1";
+
+  const warmNow = async () => {
+    const ids = warmCandidates();
+    if (ids.length === 0) {
+      toast("info", "Every enabled account already has an open 5-hour window (or is at a limit)");
+      return;
+    }
+    try {
+      const n = await ipc.warmAccounts(ids);
+      toast(
+        "success",
+        n > 0
+          ? `Warming ${n} account(s) — each gets one throwaway prompt, killed at the first reply`
+          : "Nothing to warm (recently warmed accounts are skipped)",
+      );
+    } catch (e) {
+      toast("error", String(e));
+    }
+  };
 
   const toggleTap = async () => {
     setTapBusy(true);
@@ -232,6 +253,21 @@ export default function SettingsView() {
           on the same account with <code>--continue</code> the moment its window resets. Leave the PC running and the
           work resumes by itself.
         </label>
+        <label className="radio">
+          <input
+            type="checkbox"
+            checked={autoWarmup}
+            onChange={(e) => setKey("auto_warmup", e.target.checked ? "1" : "0")}
+          />
+          Auto warm-up — when you launch a Claude, open the 5-hour window on every other enabled account too: a
+          headless <code>claude -p</code> (haiku) sends one throwaway prompt and is killed the moment the first reply
+          arrives. All your timers run from the start of your day instead of starting mid-task.
+        </label>
+        <div className="row" style={{ marginTop: 6 }}>
+          <button className="btn btn-sm" onClick={warmNow} title="Open the 5-hour window on every enabled account whose window is closed">
+            ⏱ Warm up all accounts now
+          </button>
+        </div>
         <div className="row" style={{ marginTop: 8 }}>
           <label className="inline-label">
             Usage scan interval (seconds)

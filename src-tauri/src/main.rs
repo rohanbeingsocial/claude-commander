@@ -16,6 +16,7 @@ mod state;
 mod statusline;
 mod tasks;
 mod usage;
+mod warmup;
 
 use state::AppState;
 use std::collections::HashMap;
@@ -140,7 +141,8 @@ fn main() {
             misc::open_external_terminal,
             misc::list_dir,
             statusline::install_usage_tap,
-            statusline::remove_usage_tap
+            statusline::remove_usage_tap,
+            warmup::warm_accounts
         ])
         .build(tauri::generate_context!())
         .expect("failed to build Claude Commander")

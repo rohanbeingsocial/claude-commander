@@ -4,6 +4,7 @@ import { ipc } from "../ipc";
 import { useStore } from "../store";
 import type { Recommendation, Worktree } from "../types";
 import { basename } from "../util";
+import { maybeAutoWarm } from "../warmup";
 
 export default function LaunchModal() {
   const launchOpen = useStore((s) => s.launchOpen);
@@ -152,6 +153,7 @@ export default function LaunchModal() {
       s.setView("terminals");
       closeLaunch();
       toast("success", `${inst.accountName} launched in ${basename(cwd)}`);
+      if (!isShell) void maybeAutoWarm(accountId);
     } catch (e) {
       toast("error", String(e));
     } finally {
