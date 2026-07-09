@@ -176,7 +176,7 @@ export default function LaunchModal() {
           </label>
           <label className="radio">
             <input type="radio" checked={kind === "shell"} onChange={() => setKind("shell")} /> Plain terminal
-            (PowerShell — the account's <code>CLAUDE_CONFIG_DIR</code> is preloaded)
+            (your shell, with the account's <code>CLAUDE_CONFIG_DIR</code> preloaded)
           </label>
         </div>
 

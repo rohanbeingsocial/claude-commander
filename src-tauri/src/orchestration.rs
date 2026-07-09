@@ -5,7 +5,6 @@
 //! stops for any reason a closure report is produced, so progress is never lost and the
 //! orchestrator always learns how far it got. See docs/ORCHESTRATION.md.
 
-use crate::git::CREATE_NO_WINDOW;
 use crate::models::{ClosureReport, WorkerTask, WorkerUsage};
 use crate::state::AppState;
 use crate::{db, usage};
@@ -13,7 +12,6 @@ use rusqlite::{params, Connection, Row};
 use serde_json::{json, Value};
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Write};
-use std::os::windows::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -82,15 +80,21 @@ fn live_reset(config_dir: &str, kind: &str) -> Option<String> {
 }
 
 fn build_worker_command(claude: &str, cwd: &str, config_dir: &str, model: &Option<String>, extra_args: &str) -> Command {
-    let lower = claude.to_lowercase();
-    let mut cmd = if lower.ends_with(".cmd") || lower.ends_with(".bat") {
-        let mut c = Command::new("cmd.exe");
-        c.arg("/c");
-        c.arg(claude);
-        c
-    } else {
-        Command::new(claude)
+    // npm installs land claude as a .cmd shim on Windows, which needs cmd.exe to run
+    #[cfg(windows)]
+    let mut cmd = {
+        let lower = claude.to_lowercase();
+        if lower.ends_with(".cmd") || lower.ends_with(".bat") {
+            let mut c = Command::new("cmd.exe");
+            c.arg("/c");
+            c.arg(claude);
+            c
+        } else {
+            Command::new(claude)
+        }
     };
+    #[cfg(not(windows))]
+    let mut cmd = Command::new(claude);
     cmd.arg("-p").arg("--output-format").arg("stream-json").arg("--verbose");
     if let Some(m) = model {
         if !m.trim().is_empty() {
@@ -105,7 +109,9 @@ fn build_worker_command(claude: &str, cwd: &str, config_dir: &str, model: &Optio
     cmd.env_remove("CLAUDECODE");
     cmd.env_remove("CLAUDE_CODE_ENTRYPOINT");
     cmd.env_remove("CLAUDE_CODE_SSE_PORT");
-    cmd.creation_flags(CREATE_NO_WINDOW);
+    crate::platform::quiet(&mut cmd);
+    // own process group on Unix so stop_worker can kill the whole tree
+    crate::platform::own_process_group(&mut cmd);
     cmd
 }
 
@@ -709,10 +715,7 @@ pub fn stop_worker(state: State<'_, AppState>, worker_id: i64) -> Result<(), Str
             .flatten()
     };
     if let Some(pid) = pid {
-        let _ = Command::new("taskkill")
-            .args(["/PID", &pid.to_string(), "/T", "/F"])
-            .creation_flags(CREATE_NO_WINDOW)
-            .output();
+        crate::platform::kill_tree(pid);
     }
     let conn = state.db.lock().unwrap();
     conn.execute(
@@ -750,14 +753,9 @@ pub fn set_operator(
     Ok(())
 }
 
-/// True when a PID is still alive (best-effort, via tasklist).
+/// True when a PID is still alive (best-effort).
 fn pid_alive(pid: i64) -> bool {
-    Command::new("tasklist")
-        .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).contains(&format!("\"{pid}\"")))
-        .unwrap_or(true)
+    crate::platform::pid_alive(pid)
 }
 
 /// Boot-time reconciliation. Workers are plain child processes, so they survive a Commander

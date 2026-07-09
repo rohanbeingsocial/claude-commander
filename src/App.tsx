@@ -10,6 +10,7 @@ import TaskPanel from "./components/TaskPanel";
 import Toasts from "./components/Toasts";
 import { useStore } from "./store";
 import { initPtyRouting } from "./terminals";
+import { IS_MAC } from "./util";
 import type { AccountUsage, FailoverDoneEv, LimitHitEv, PtyExitEv, ToastEv, View } from "./types";
 import Dashboard from "./views/Dashboard";
 import Projects from "./views/Projects";
@@ -79,7 +80,9 @@ export default function App() {
         ];
 
     const onKey = (ev: KeyboardEvent) => {
-      if (!ev.ctrlKey || ev.altKey) return;
+      // Ctrl everywhere; Cmd also works on macOS
+      const mod = ev.ctrlKey || (IS_MAC && ev.metaKey);
+      if (!mod || ev.altKey) return;
       const s = useStore.getState();
       if (ev.key === "b" || ev.key === "B") {
         s.cycleSidebar();

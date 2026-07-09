@@ -1,13 +1,11 @@
 use crate::db;
-use crate::git::CREATE_NO_WINDOW;
+use crate::platform;
 use crate::state::AppState;
 use rusqlite::Connection;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fs;
-use std::os::windows::process::CommandExt;
 use std::path::Path;
-use std::process::Command;
 use tauri::{AppHandle, State};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
@@ -63,25 +61,7 @@ pub fn resolve_claude(conn: &Connection) -> String {
             return p;
         }
     }
-    if let Some(home) = dirs::home_dir() {
-        let c = home.join(".local").join("bin").join("claude.exe");
-        if c.exists() {
-            return c.to_string_lossy().to_string();
-        }
-    }
-    if let Ok(out) = Command::new("where.exe").arg("claude").creation_flags(CREATE_NO_WINDOW).output() {
-        if out.status.success() {
-            let s = String::from_utf8_lossy(&out.stdout);
-            let lines: Vec<&str> = s.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
-            if let Some(exe) = lines.iter().find(|l| l.to_lowercase().ends_with(".exe")) {
-                return exe.to_string();
-            }
-            if let Some(first) = lines.first() {
-                return first.to_string();
-            }
-        }
-    }
-    String::new()
+    platform::find_claude()
 }
 
 #[tauri::command]
@@ -117,11 +97,10 @@ pub fn open_in_explorer(path: String) -> Result<(), String> {
     if !Path::new(&path).exists() {
         return Err("Path does not exist".into());
     }
-    Command::new("explorer.exe").arg(&path).spawn().map_err(|e| e.to_string())?;
-    Ok(())
+    platform::open_file_manager(&path)
 }
 
-/// Fallback: open a real Windows terminal with the account's env preconfigured.
+/// Fallback: open a real OS terminal window with the account's env preconfigured.
 #[tauri::command]
 pub fn open_external_terminal(state: State<'_, AppState>, account_id: i64, cwd: String) -> Result<(), String> {
     let claude = state.claude_path.lock().unwrap().clone();
@@ -130,17 +109,5 @@ pub fn open_external_terminal(state: State<'_, AppState>, account_id: i64, cwd: 
         conn.query_row("SELECT config_dir FROM accounts WHERE id=?1", [account_id], |r| r.get(0))
             .map_err(|_| "Account not found".to_string())?
     };
-    let esc = |s: &str| s.replace('\'', "''");
-    let ps = format!(
-        "$env:CLAUDE_CONFIG_DIR='{}'; Set-Location '{}'; & '{}'",
-        esc(&cfg),
-        esc(&cwd),
-        esc(&claude)
-    );
-    Command::new("cmd.exe")
-        .args(["/c", "start", "Claude Code", "powershell.exe", "-NoExit", "-Command", &ps])
-        .creation_flags(CREATE_NO_WINDOW)
-        .spawn()
-        .map_err(|e| e.to_string())?;
-    Ok(())
+    platform::open_external_terminal(&claude, &cfg, &cwd)
 }

@@ -1,3 +1,7 @@
+/** True on macOS — used to accept Cmd where Windows/Linux use Ctrl. (Guarded so the
+ *  module also loads outside a browser, e.g. in the headless demo smoke test.) */
+export const IS_MAC = typeof navigator !== "undefined" && navigator.platform.toUpperCase().includes("MAC");
+
 export function b64decode(s: string): Uint8Array {
   const bin = atob(s);
   const out = new Uint8Array(bin.length);

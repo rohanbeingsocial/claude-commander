@@ -232,7 +232,7 @@ function TileToolbar({
         <span className={`status-dot st-${status}`} />
         <strong>{inst.accountName}</strong>
         {isShell && (
-          <span className="cell-shell" title="Plain PowerShell terminal — CLAUDE_CONFIG_DIR points at this account">
+          <span className="cell-shell" title="Plain shell terminal — CLAUDE_CONFIG_DIR points at this account">
             ⌨ SHELL
           </span>
         )}
@@ -509,7 +509,7 @@ export default function TerminalGrid() {
       <button className="btn btn-primary btn-sm" onClick={() => openLaunch()}>
         + New Claude
       </button>
-      <button className="btn btn-sm" title="Plain PowerShell terminal (account env preloaded)" onClick={() => openLaunch({ kind: "shell" })}>
+      <button className="btn btn-sm" title="Plain shell terminal (account env preloaded)" onClick={() => openLaunch({ kind: "shell" })}>
         + Shell
       </button>
       <span className="dim small">

@@ -356,5 +356,8 @@ mod tests {
     fn sanitize_matches_claude_encoding() {
         assert_eq!(sanitize_path("D:\\All Coding stuff\\os"), "D--All-Coding-stuff-os");
         assert_eq!(sanitize_path("C:\\Users\\alice\\proj.x"), "C--Users-alice-proj-x");
+        // Unix paths encode the same way Claude Code does (leading dash preserved)
+        assert_eq!(sanitize_path("/Users/alice/proj.x"), "-Users-alice-proj-x");
+        assert_eq!(sanitize_path("/home/alice/my proj"), "-home-alice-my-proj");
     }
 }

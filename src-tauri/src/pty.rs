@@ -10,11 +10,15 @@ use std::path::Path;
 use std::thread;
 use tauri::{AppHandle, Emitter, Manager, State};
 
-/// A plain PowerShell terminal. CLAUDE_CONFIG_DIR is still set to the account's config
-/// dir, so `claude` (or the user's own hand-over CLI) typed inside it runs on that account.
+/// A plain shell terminal (PowerShell on Windows, the user's $SHELL elsewhere).
+/// CLAUDE_CONFIG_DIR is still set to the account's config dir, so `claude` (or the user's
+/// own hand-over CLI) typed inside it runs on that account.
 fn build_shell_command(cwd: &str, config_dir: &str) -> CommandBuilder {
-    let mut cmd = CommandBuilder::new("powershell.exe");
-    cmd.arg("-NoLogo");
+    let (shell, args) = crate::platform::interactive_shell();
+    let mut cmd = CommandBuilder::new(shell);
+    for a in args {
+        cmd.arg(a);
+    }
     cmd.cwd(cwd);
     cmd.env("CLAUDE_CONFIG_DIR", config_dir);
     cmd.env_remove("CLAUDECODE");
@@ -32,15 +36,21 @@ fn build_command(
     initial_prompt: Option<&str>,
     orch: Option<&crate::mcp::OrchestratorLaunch>,
 ) -> CommandBuilder {
-    let lower = claude.to_lowercase();
-    let mut cmd = if lower.ends_with(".cmd") || lower.ends_with(".bat") {
-        let mut c = CommandBuilder::new("cmd.exe");
-        c.arg("/c");
-        c.arg(claude);
-        c
-    } else {
-        CommandBuilder::new(claude)
+    // npm installs land claude as a .cmd shim on Windows, which needs cmd.exe to run
+    #[cfg(windows)]
+    let mut cmd = {
+        let lower = claude.to_lowercase();
+        if lower.ends_with(".cmd") || lower.ends_with(".bat") {
+            let mut c = CommandBuilder::new("cmd.exe");
+            c.arg("/c");
+            c.arg(claude);
+            c
+        } else {
+            CommandBuilder::new(claude)
+        }
     };
+    #[cfg(not(windows))]
+    let mut cmd = CommandBuilder::new(claude);
     match mode {
         "continue" => {
             cmd.arg("--continue");

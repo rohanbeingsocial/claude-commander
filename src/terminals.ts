@@ -5,7 +5,7 @@ import { readText as clipReadText, writeText as clipWriteText } from "@tauri-app
 import { isDemoMode, onDemoPtyOut } from "./demo";
 import { ipc } from "./ipc";
 import { useStore } from "./store";
-import { b64decode, b64encodeText } from "./util";
+import { b64decode, b64encodeText, IS_MAC } from "./util";
 import type { PtyOutEv } from "./types";
 
 /** Read the OS clipboard. The native Rust command is tried first — it cannot be blocked
@@ -173,14 +173,21 @@ function ensureEntry(instanceId: number): Entry {
   term.attachCustomKeyEventHandler((ev) => {
     if (ev.type !== "keydown") return true;
     const key = ev.key.toLowerCase();
-    // Paste: Ctrl+V, Ctrl+Shift+V, Shift+Insert
-    if ((ev.ctrlKey && key === "v") || (ev.shiftKey && ev.key === "Insert")) {
+    // primary modifier: Ctrl on Windows/Linux, Cmd on macOS (Ctrl+Shift still works there)
+    const primary = IS_MAC ? ev.metaKey : ev.ctrlKey;
+    // Paste: Ctrl+V / Cmd+V, Ctrl+Shift+V, Shift+Insert
+    if ((primary && key === "v") || (ev.ctrlKey && ev.shiftKey && key === "v") || (ev.shiftKey && ev.key === "Insert")) {
       ev.preventDefault();
       void pasteInto(instanceId);
       return false;
     }
-    // Copy: Ctrl+Shift+C or Ctrl+Insert, or Ctrl+C while text is selected (else ^C passes)
-    if ((ev.ctrlKey && ev.shiftKey && key === "c") || (ev.ctrlKey && ev.key === "Insert")) {
+    // Copy: Ctrl+Shift+C / Cmd+C (mac) / Ctrl+Insert, or Ctrl+C while text is selected
+    // (else ^C passes through as an interrupt — Cmd+C never sends ^C)
+    if (
+      (ev.ctrlKey && ev.shiftKey && key === "c") ||
+      (IS_MAC && ev.metaKey && key === "c") ||
+      (ev.ctrlKey && ev.key === "Insert")
+    ) {
       ev.preventDefault();
       void copySelection(instanceId);
       return false;

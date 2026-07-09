@@ -1,16 +1,12 @@
 use crate::models::Worktree;
-use std::os::windows::process::CommandExt;
+use crate::platform;
 use std::process::Command;
 
-pub const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-
 pub fn run(cwd: &str, args: &[&str]) -> Result<String, String> {
-    let out = Command::new("git")
-        .args(args)
-        .current_dir(cwd)
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .map_err(|e| format!("failed to run git: {e}"))?;
+    let mut cmd = Command::new("git");
+    cmd.args(args).current_dir(cwd);
+    platform::quiet(&mut cmd);
+    let out = cmd.output().map_err(|e| format!("failed to run git: {e}"))?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
     } else {
@@ -28,8 +24,17 @@ pub fn is_repo(cwd: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Path equality key for "is this worktree the repo root". Windows paths are
+/// case-insensitive with mixed separators; Unix paths are used as-is.
 fn normalize(p: &str) -> String {
-    p.replace('/', "\\").trim_end_matches('\\').to_lowercase()
+    #[cfg(windows)]
+    {
+        p.replace('/', "\\").trim_end_matches('\\').to_lowercase()
+    }
+    #[cfg(not(windows))]
+    {
+        p.trim_end_matches('/').to_string()
+    }
 }
 
 pub fn worktrees(root: &str) -> Result<Vec<Worktree>, String> {
@@ -58,7 +63,12 @@ pub fn worktrees(root: &str) -> Result<Vec<Worktree>, String> {
             continue;
         }
         if let Some(rest) = line.strip_prefix("worktree ") {
-            cur_path = Some(rest.replace('/', "\\"));
+            // git prints forward slashes even on Windows; show native separators there
+            #[cfg(windows)]
+            let native = rest.replace('/', "\\");
+            #[cfg(not(windows))]
+            let native = rest.to_string();
+            cur_path = Some(native);
         } else if let Some(rest) = line.strip_prefix("HEAD ") {
             cur_head = rest.chars().take(8).collect();
         } else if let Some(rest) = line.strip_prefix("branch ") {

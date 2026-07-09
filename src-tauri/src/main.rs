@@ -9,6 +9,7 @@ mod mcp;
 mod misc;
 mod models;
 mod orchestration;
+mod platform;
 mod projects;
 mod pty;
 mod state;
