@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open } from "../dialog";
 import { ipc } from "../ipc";
 import { useStore } from "../store";
 import type { Recommendation, Worktree } from "../types";

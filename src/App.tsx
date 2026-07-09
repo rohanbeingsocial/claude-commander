@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { DndProvider } from "react-dnd";
 import { DND_BACKEND, DND_OPTIONS } from "./dnd";
-import { isDemoMode, onDemoFailoverDone, onDemoInstancesChanged, setDemoMode } from "./demo";
+import { isDemoMode, isWebDemo, onDemoFailoverDone, onDemoInstancesChanged, setDemoMode } from "./demo";
 import FailoverModal from "./components/FailoverModal";
 import FileTree from "./components/FileTree";
 import LaunchModal from "./components/LaunchModal";
@@ -60,19 +60,23 @@ export default function App() {
       onDemoFailoverDone(onFailoverDone);
     }
 
-    const subs: Promise<UnlistenFn>[] = [
-      listen<AccountUsage[]>("usage-updated", (e) => useStore.getState().setAccounts(e.payload)),
-      listen<PtyExitEv>("pty-exit", () => useStore.getState().refreshInstances()),
-      listen<LimitHitEv>("limit-hit", (e) => {
-        const s = useStore.getState();
-        s.refreshInstances();
-        s.refreshAccounts();
-        if (!e.payload.auto) s.setLimitPrompt(e.payload);
-      }),
-      listen<FailoverDoneEv>("failover-done", (e) => onFailoverDone(e.payload)),
-      listen<ToastEv>("toast", (e) => useStore.getState().toast(e.payload.level, e.payload.message)),
-      listen("workers-updated", () => useStore.getState().refreshWorkers()),
-    ];
+    // no Tauri events fire in demo mode, and in the hosted web demo there is no Tauri
+    // at all — subscribing would just produce rejected promises
+    const subs: Promise<UnlistenFn>[] = isDemoMode()
+      ? []
+      : [
+          listen<AccountUsage[]>("usage-updated", (e) => useStore.getState().setAccounts(e.payload)),
+          listen<PtyExitEv>("pty-exit", () => useStore.getState().refreshInstances()),
+          listen<LimitHitEv>("limit-hit", (e) => {
+            const s = useStore.getState();
+            s.refreshInstances();
+            s.refreshAccounts();
+            if (!e.payload.auto) s.setLimitPrompt(e.payload);
+          }),
+          listen<FailoverDoneEv>("failover-done", (e) => onFailoverDone(e.payload)),
+          listen<ToastEv>("toast", (e) => useStore.getState().toast(e.payload.level, e.payload.message)),
+          listen("workers-updated", () => useStore.getState().refreshWorkers()),
+        ];
 
     const onKey = (ev: KeyboardEvent) => {
       if (!ev.ctrlKey || ev.altKey) return;
@@ -228,12 +232,23 @@ export default function App() {
       <FailoverModal />
       <Toasts />
       {isDemoMode() && (
-        <div className="demo-pill" title="Demo mode: sample data only. No account signs in, no claude.exe runs, and nothing you type is sent anywhere. Exit restores your real data (untouched).">
+        <div className="demo-pill" title="Demo mode: sample data only. No account signs in, no claude.exe runs, and nothing you type is sent anywhere.">
           <span className="demo-pill-dot" />
           DEMO — sample data · nothing signs in or runs
-          <button className="demo-pill-btn" onClick={() => setDemoMode(false)}>
-            Exit demo
-          </button>
+          {isWebDemo() ? (
+            <a
+              className="demo-pill-btn"
+              href="https://github.com/rohanbeingsocial/claude-commander"
+              target="_blank"
+              rel="noreferrer"
+            >
+              Get the app ↗
+            </a>
+          ) : (
+            <button className="demo-pill-btn" onClick={() => setDemoMode(false)}>
+              Exit demo
+            </button>
+          )}
         </div>
       )}
     </div>

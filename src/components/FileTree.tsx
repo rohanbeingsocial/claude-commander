@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useDrag } from "react-dnd";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open } from "../dialog";
 import { ipc } from "../ipc";
 import { useStore } from "../store";
 import { DND_FILE, type FileDragItem, type FsEntry } from "../types";

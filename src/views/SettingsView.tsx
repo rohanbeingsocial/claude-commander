@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
-import { isDemoMode, setDemoMode } from "../demo";
+import { open } from "../dialog";
+import { isDemoMode, isWebDemo, setDemoMode } from "../demo";
 import { ipc } from "../ipc";
 import { useStore } from "../store";
 import type { AccountUsage } from "../types";
@@ -324,9 +324,19 @@ export default function SettingsView() {
           Your real accounts, sessions and tasks are untouched and come back when you exit. (Reloading the app resets
           the demo data.)
         </div>
-        <button className="btn btn-sm" onClick={() => setDemoMode(!isDemoMode())}>
-          {isDemoMode() ? "Exit demo mode" : "Enter demo mode"}
-        </button>
+        {isWebDemo() ? (
+          <div className="dim small">
+            You're on the hosted web demo, which is this mode permanently —{" "}
+            <a href="https://github.com/rohanbeingsocial/claude-commander" target="_blank" rel="noreferrer">
+              install the app
+            </a>{" "}
+            for the real thing.
+          </div>
+        ) : (
+          <button className="btn btn-sm" onClick={() => setDemoMode(!isDemoMode())}>
+            {isDemoMode() ? "Exit demo mode" : "Enter demo mode"}
+          </button>
+        )}
       </div>
     </div>
   );

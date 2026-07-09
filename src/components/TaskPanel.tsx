@@ -305,6 +305,8 @@ export default function TaskPanel() {
 
   // native (Tauri) file drop gives real absolute paths; hit-test against task cards
   useEffect(() => {
+    // no Tauri in the browser-hosted web demo — getCurrentWebview() would throw
+    if (!("__TAURI_INTERNALS__" in window)) return;
     let un: UnlistenFn | undefined;
     const hit = (pos: { x: number; y: number }): number | null => {
       const dpr = window.devicePixelRatio || 1;

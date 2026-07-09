@@ -1793,3 +1793,7 @@ textarea {
   border-color: var(--accent-dim);
   background: var(--card-hover);
 }
+a.demo-pill-btn {
+  text-decoration: none;
+  color: var(--text);
+}

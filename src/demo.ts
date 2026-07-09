@@ -27,7 +27,17 @@ import { b64decode, b64encodeText, basename } from "./util";
 
 const LS_KEY = "demoMode";
 
+// The hosted web demo (GitHub Pages) is a plain-browser build with demo mode baked in:
+// there is no Tauri backend at all, so demo mode is forced and can't be exited.
+const WEB_DEMO = import.meta.env.VITE_DEMO_BUILD === "1";
+
+/** True only in the browser-hosted demo build (no Tauri backend behind the page). */
+export function isWebDemo(): boolean {
+  return WEB_DEMO;
+}
+
 export function isDemoMode(): boolean {
+  if (WEB_DEMO) return true;
   try {
     return localStorage.getItem(LS_KEY) === "1";
   } catch {
@@ -37,6 +47,7 @@ export function isDemoMode(): boolean {
 
 /** Enter/exit demo mode. A full reload swaps the ipc layer and resets demo state. */
 export function setDemoMode(on: boolean): void {
+  if (WEB_DEMO) return; // the hosted demo has nothing to exit to
   try {
     if (on) localStorage.setItem(LS_KEY, "1");
     else localStorage.removeItem(LS_KEY);

@@ -7,6 +7,9 @@
 
 > A local-first **operations center for [Claude Code](https://docs.anthropic.com/en/docs/claude-code)** on Windows — a live grid of Claude terminals with per-account usage meters, a permanent task board, git-worktree launching, and zero-context-loss handover between accounts.
 
+**▶ [Try the live demo in your browser](https://rohanbeingsocial.github.io/claude-commander/)** — no install,
+no sign-in: sample accounts and simulated terminals show every flow. Nothing runs and nothing you type goes anywhere.
+
 Think *tmux + Terminator + Claude Code + task manager* in one native window. Launch
 instances into repos and worktrees, watch every account's rate-limit usage live in each
 terminal header, assign tasks (with linked markdown) straight into a running Claude, and
@@ -117,9 +120,10 @@ Windows 10 grab the [Evergreen runtime](https://developer.microsoft.com/microsof
 > Windows SmartScreen may warn on first run — the installer isn't code-signed yet. Click
 > **More info → Run anyway**, or build from source below if you'd rather compile it yourself.
 
-> **Just want a look?** You don't even need Claude Code: launch the app and click
-> **Try demo mode** (or **Settings → Demo mode**). It fills the grid with sample accounts and
-> simulated terminals — nothing signs in, nothing runs, nothing you type goes anywhere.
+> **Just want a look?** Open the **[live web demo](https://rohanbeingsocial.github.io/claude-commander/)** —
+> nothing to install. The installed app has the same thing built in: click **Try demo mode**
+> (or **Settings → Demo mode**) to explore with sample accounts and simulated terminals —
+> nothing signs in, nothing runs, nothing you type goes anywhere.
 
 ### Option B — build from source
 
