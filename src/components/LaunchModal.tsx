@@ -23,6 +23,7 @@ export default function LaunchModal() {
   const [worktreePath, setWorktreePath] = useState("");
   const [newBranch, setNewBranch] = useState("");
   const [baseBranch, setBaseBranch] = useState("");
+  const [kind, setKind] = useState<"claude" | "shell">("claude");
   const [mode, setMode] = useState<"new" | "continue">("new");
   const [extraArgs, setExtraArgs] = useState("");
   const [initialPrompt, setInitialPrompt] = useState("");
@@ -39,6 +40,7 @@ export default function LaunchModal() {
     setWorkerPool([]);
     setUseOwnAgents(false);
     setNewBranch("");
+    setKind(launchPreset?.kind === "shell" ? "shell" : "claude");
     setMode((launchPreset?.mode as "new" | "continue") ?? "new");
     setExtraArgs(settings.extra_args_default ?? "");
     setProjectId(launchPreset?.projectId ?? (projects[0]?.id ?? null));
@@ -130,16 +132,18 @@ export default function LaunchModal() {
       if ((settings.extra_args_default ?? "") !== extraArgs) {
         ipc.setSetting("extra_args_default", extraArgs).catch(() => {});
       }
+      const isShell = kind === "shell";
       const inst = await ipc.launchInstance({
         accountId,
         projectId: project.id,
         cwd,
-        mode,
-        extraArgs,
-        initialPrompt: initialPrompt || undefined,
-        isOrchestrator,
-        workerPool: isOrchestrator ? workerPool : undefined,
-        useOwnAgents: isOrchestrator ? useOwnAgents : undefined,
+        mode: isShell ? "new" : mode,
+        extraArgs: isShell ? "" : extraArgs,
+        initialPrompt: isShell ? undefined : initialPrompt || undefined,
+        isOrchestrator: isShell ? false : isOrchestrator,
+        workerPool: !isShell && isOrchestrator ? workerPool : undefined,
+        useOwnAgents: !isShell && isOrchestrator ? useOwnAgents : undefined,
+        kind,
       });
       const s = useStore.getState();
       await Promise.all([s.refreshInstances(), s.refreshAccounts(), s.refreshSettings()]);
@@ -159,10 +163,21 @@ export default function LaunchModal() {
     <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && closeLaunch()}>
       <div className="modal">
         <div className="modal-head">
-          <h2>New Claude instance</h2>
+          <h2>{kind === "shell" ? "New terminal" : "New Claude instance"}</h2>
           <button className="btn btn-ghost btn-sm" onClick={closeLaunch}>
             ✕
           </button>
+        </div>
+
+        <label className="field-label">Type</label>
+        <div className="row wrap">
+          <label className="radio">
+            <input type="radio" checked={kind === "claude"} onChange={() => setKind("claude")} /> Claude Code
+          </label>
+          <label className="radio">
+            <input type="radio" checked={kind === "shell"} onChange={() => setKind("shell")} /> Plain terminal
+            (PowerShell — the account's <code>CLAUDE_CONFIG_DIR</code> is preloaded)
+          </label>
         </div>
 
         <label className="field-label">Account</label>
@@ -260,6 +275,8 @@ export default function LaunchModal() {
           </>
         )}
 
+        {kind === "claude" && (
+        <>
         <label className="field-label">Session</label>
         <div className="row wrap">
           <label className="radio">
@@ -329,6 +346,8 @@ export default function LaunchModal() {
           value={extraArgs}
           onChange={(e) => setExtraArgs(e.target.value)}
         />
+        </>
+        )}
 
         <div className="modal-actions">
           <button className="btn" onClick={closeLaunch}>

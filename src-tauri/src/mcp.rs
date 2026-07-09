@@ -23,10 +23,12 @@ use tauri::{AppHandle, Manager};
 /// actually reaches for the delegation tools instead of doing the heavy work itself.
 const SYSTEM_PROMPT: &str = "You are an orchestrator in Claude Commander. Delegate substantial \
     subtasks to worker accounts using the commander MCP tools - delegate, poll, collect, \
-    workers_list, workers_usage, broadcast_context - rather than doing the heavy work yourself. \
-    Plan the work, dispatch it across the worker pool, and read the distilled worker reports to \
-    stay cheap. When a worker pauses at a usage limit, decide whether to wait for its reset or \
-    reassign the remainder.";
+    workers_list, workers_usage, broadcast_context, adopt_workers - rather than doing the heavy \
+    work yourself. Plan the work, dispatch it across the worker pool, and read the distilled \
+    worker reports to stay cheap. When a worker pauses at a usage limit, decide whether to wait \
+    for its reset or reassign the remainder. If you were relaunched after a previous operator \
+    session died or hit its limit, call adopt_workers first to take over its workers and their \
+    progress.";
 
 /// What pty.rs needs to launch an instance as an orchestrator.
 pub struct OrchestratorLaunch {
@@ -262,6 +264,11 @@ fn tool_defs() -> Value {
             }
         },
         {
+            "name": "adopt_workers",
+            "description": "Take over workers whose previous orchestrator session is dead (crashed, closed, or hit its limit) in this working directory. After adopting, poll/collect see them like your own — no work is lost.",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
             "name": "broadcast_context",
             "description": "Push shared context/refs to the whole pool at once: recorded so every future worker inherits it, and copied into each running worker's folder.",
             "inputSchema": {
@@ -285,6 +292,9 @@ fn call_tool(app: &AppHandle, orch_id: i64, params: &Value) -> Value {
         "delegate" => tool_delegate(app, orch_id, &args),
         "poll" => tool_poll(app, orch_id, &args),
         "collect" => tool_collect(app, orch_id, &args),
+        "adopt_workers" => orchestration::adopt_orphans(app, orch_id).map(|n| {
+            json!({ "adopted": n, "note": if n > 0 { "Adopted — poll now includes them." } else { "No orphaned workers found in this working directory." } })
+        }),
         "broadcast_context" => tool_broadcast(app, orch_id, &args),
         other => Err(format!("unknown tool: {other}")),
     };

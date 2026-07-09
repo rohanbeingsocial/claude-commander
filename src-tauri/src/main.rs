@@ -79,6 +79,8 @@ fn main() {
                             .unwrap_or(60)
                             .clamp(15, 3600)
                     };
+                    // auto-wake limit-stuck instances whose window has reset (opt-in setting)
+                    failover::auto_wake_tick(&handle);
                     std::thread::sleep(Duration::from_secs(interval));
                 }
             });
@@ -131,6 +133,8 @@ fn main() {
             tasks::read_task_progress,
             misc::get_settings,
             misc::set_setting,
+            misc::clipboard_read,
+            misc::clipboard_write,
             misc::open_in_explorer,
             misc::open_external_terminal,
             misc::list_dir,

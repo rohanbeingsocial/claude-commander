@@ -10,6 +10,19 @@ use std::path::Path;
 use std::thread;
 use tauri::{AppHandle, Emitter, Manager, State};
 
+/// A plain PowerShell terminal. CLAUDE_CONFIG_DIR is still set to the account's config
+/// dir, so `claude` (or the user's own hand-over CLI) typed inside it runs on that account.
+fn build_shell_command(cwd: &str, config_dir: &str) -> CommandBuilder {
+    let mut cmd = CommandBuilder::new("powershell.exe");
+    cmd.arg("-NoLogo");
+    cmd.cwd(cwd);
+    cmd.env("CLAUDE_CONFIG_DIR", config_dir);
+    cmd.env_remove("CLAUDECODE");
+    cmd.env_remove("CLAUDE_CODE_ENTRYPOINT");
+    cmd.env_remove("CLAUDE_CODE_SSE_PORT");
+    cmd
+}
+
 fn build_command(
     claude: &str,
     cwd: &str,
@@ -206,13 +219,15 @@ pub fn spawn_claude(
     extra_args: &str,
     initial_prompt: Option<&str>,
     orch: Option<&crate::mcp::OrchestratorLaunch>,
+    kind: &str,
 ) -> Result<Instance, String> {
+    let is_shell = kind == "shell";
     let state = app.state::<AppState>();
     if !Path::new(cwd).is_dir() {
         return Err(format!("Folder does not exist: {cwd}"));
     }
     let claude = state.claude_path.lock().unwrap().clone();
-    if claude.is_empty() {
+    if claude.is_empty() && !is_shell {
         return Err("claude executable not found — set the path in Settings".into());
     }
     let (config_dir, account_name, enabled): (String, String, bool) = {
@@ -234,7 +249,11 @@ pub fn spawn_claude(
     let pair = pty_system
         .openpty(PtySize { rows: 30, cols: 110, pixel_width: 0, pixel_height: 0 })
         .map_err(|e| e.to_string())?;
-    let cmd = build_command(&claude, cwd, &config_dir, mode, extra_args, initial_prompt, orch);
+    let cmd = if is_shell {
+        build_shell_command(cwd, &config_dir)
+    } else {
+        build_command(&claude, cwd, &config_dir, mode, extra_args, initial_prompt, orch)
+    };
     let mut child = pair.slave.spawn_command(cmd).map_err(|e| format!("Failed to start claude: {e}"))?;
     drop(pair.slave);
     let killer = child.clone_killer();
@@ -245,8 +264,8 @@ pub fn spawn_claude(
     let instance_id: i64 = {
         let conn = state.db.lock().unwrap();
         conn.execute(
-            "INSERT INTO instances(account_id, project_id, cwd, mode, status, started_at) VALUES(?1,?2,?3,?4,'running',?5)",
-            params![account_id, project_id, cwd, mode, started_at],
+            "INSERT INTO instances(account_id, project_id, cwd, mode, status, started_at, kind) VALUES(?1,?2,?3,?4,'running',?5,?6)",
+            params![account_id, project_id, cwd, mode, started_at, kind],
         )
         .map_err(|e| e.to_string())?;
         conn.last_insert_rowid()
@@ -259,7 +278,8 @@ pub fn spawn_claude(
         thread::spawn(move || {
             let mut buf = [0u8; 8192];
             let mut tail = String::new();
-            let mut limit_notified = false;
+            // shells never trip limit handling — only real Claude sessions are watched
+            let mut limit_notified = is_shell;
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) | Err(_) => break,
@@ -303,11 +323,13 @@ pub fn spawn_claude(
                     "UPDATE instances SET status = CASE WHEN status='running' THEN 'exited' ELSE status END, ended_at=?1, exit_code=?2 WHERE id=?3",
                     params![db::now_str(), code, instance_id],
                 );
-                if let Some((sid, _)) = crate::failover::find_latest_session(&cfg, &cwd_s) {
-                    let _ = conn.execute(
-                        "UPDATE instances SET session_id=?1 WHERE id=?2 AND session_id IS NULL",
-                        params![sid, instance_id],
-                    );
+                if !is_shell {
+                    if let Some((sid, _)) = crate::failover::find_latest_session(&cfg, &cwd_s) {
+                        let _ = conn.execute(
+                            "UPDATE instances SET session_id=?1 WHERE id=?2 AND session_id IS NULL",
+                            params![sid, instance_id],
+                        );
+                    }
                 }
                 let _ = usage::scan_account(&conn, account_id, &cfg);
             }
@@ -340,6 +362,7 @@ pub fn spawn_claude(
         account_name,
         project_name: None,
         mode: mode.to_string(),
+        kind: kind.to_string(),
         is_orchestrator: false,
         worker_pool: Vec::new(),
         use_own_agents: false,
@@ -361,11 +384,16 @@ pub fn launch_instance(
     is_orchestrator: Option<bool>,
     worker_pool: Option<Vec<i64>>,
     use_own_agents: Option<bool>,
+    kind: Option<String>,
 ) -> Result<Instance, String> {
+    let kind = match kind.as_deref() {
+        Some("shell") => "shell",
+        _ => "claude",
+    };
     // For an orchestrator, mint the MCP config *before* spawning so the launch command can
     // point Claude at Commander's server and (by default) forbid its own Task subagents.
     let use_own_agents = use_own_agents == Some(true);
-    let prepared = if is_orchestrator == Some(true) {
+    let prepared = if is_orchestrator == Some(true) && kind == "claude" {
         Some(crate::mcp::prepare_orchestrator(&app, use_own_agents)?)
     } else {
         None
@@ -380,6 +408,7 @@ pub fn launch_instance(
         extra_args.as_deref().unwrap_or(""),
         initial_prompt.as_deref(),
         prepared.as_ref().map(|(_, o)| o),
+        kind,
     )?;
 
     if let Some((token, _)) = prepared {
@@ -444,7 +473,7 @@ pub fn list_instances(state: State<'_, AppState>) -> Result<Vec<Instance>, Strin
     let conn = state.db.lock().unwrap();
     let mut stmt = conn
         .prepare(
-            "SELECT i.id, i.account_id, i.project_id, i.cwd, i.mode, i.session_id, i.status, i.exit_code, i.started_at, i.ended_at, a.name, p.name, i.is_orchestrator, i.worker_pool, i.use_own_agents
+            "SELECT i.id, i.account_id, i.project_id, i.cwd, i.mode, i.session_id, i.status, i.exit_code, i.started_at, i.ended_at, a.name, p.name, i.is_orchestrator, i.worker_pool, i.use_own_agents, i.kind
              FROM instances i
              JOIN accounts a ON a.id=i.account_id
              LEFT JOIN projects p ON p.id=i.project_id
@@ -474,6 +503,7 @@ pub fn list_instances(state: State<'_, AppState>) -> Result<Vec<Instance>, Strin
                     .and_then(|s| serde_json::from_str::<Vec<i64>>(&s).ok())
                     .unwrap_or_default(),
                 use_own_agents: r.get::<_, i64>(14)? != 0,
+                kind: r.get(15)?,
             })
         })
         .map_err(|e| e.to_string())?;

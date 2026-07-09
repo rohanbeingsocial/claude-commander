@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { ipc } from "../ipc";
 import { useStore } from "../store";
-import type { Project, Worktree } from "../types";
+import type { Instance, Project, Worktree } from "../types";
+import { cwdColor, samePath } from "../util";
 
 const MEMORY_FILES = ["summary.md", "architecture.md", "decisions.md", "todos.md", "handover.md", "session-log.md"];
 
@@ -77,8 +78,11 @@ function MemoryModal({ project, onClose }: { project: Project; onClose: () => vo
   );
 }
 
+const isLiveInst = (i: Instance) => i.status === "running" || i.status === "limit_hit";
+
 export default function Projects() {
   const projects = useStore((s) => s.projects);
+  const instances = useStore((s) => s.instances);
   const refreshProjects = useStore((s) => s.refreshProjects);
   const openLaunch = useStore((s) => s.openLaunch);
   const toast = useStore((s) => s.toast);
@@ -232,11 +236,29 @@ export default function Projects() {
                     <h4>Worktrees</h4>
                     <table className="wt-table">
                       <tbody>
-                        {(worktrees[p.id] ?? []).map((w) => (
+                        {(worktrees[p.id] ?? []).map((w) => {
+                          const live = instances.filter((i) => isLiveInst(i) && samePath(i.cwd, w.path));
+                          return (
                           <tr key={w.path}>
                             <td>
+                              <span
+                                className="wt-dot"
+                                title="Terminals in this worktree carry this shade"
+                                style={{ background: cwdColor(w.path) }}
+                              />
                               <strong>{w.branch}</strong>
                               {w.isMain && <span className="chip">main</span>}
+                              {live.map((i) => (
+                                <span
+                                  key={i.id}
+                                  className="chip"
+                                  title={`${i.accountName} is ${i.status === "limit_hit" ? "at its limit" : "running"} here`}
+                                  style={{ borderColor: cwdColor(w.path, 0.7), color: cwdColor(w.path) }}
+                                >
+                                  {i.kind === "shell" ? "⌨ " : "◉ "}
+                                  {i.accountName}
+                                </span>
+                              ))}
                             </td>
                             <td className="dim small ellipsis" title={w.path}>
                               {w.path}
@@ -255,7 +277,8 @@ export default function Projects() {
                               )}
                             </td>
                           </tr>
-                        ))}
+                          );
+                        })}
                       </tbody>
                     </table>
                     <div className="row">

@@ -3,35 +3,51 @@ import { FitAddon } from "@xterm/addon-fit";
 import { listen } from "@tauri-apps/api/event";
 import { readText as clipReadText, writeText as clipWriteText } from "@tauri-apps/plugin-clipboard-manager";
 import { ipc } from "./ipc";
+import { useStore } from "./store";
 import { b64decode, b64encodeText } from "./util";
 import type { PtyOutEv } from "./types";
 
-/** Read the OS clipboard. Prefers the Tauri clipboard plugin (works reliably in
- *  WebView2, where navigator.clipboard.readText() is blocked by default); falls
- *  back to the browser API if the plugin call fails. */
-async function readClipboard(): Promise<string> {
+/** Read the OS clipboard. The native Rust command is tried first — it cannot be blocked
+ *  by WebView2 clipboard permission policy (which can silently break both
+ *  navigator.clipboard and the plugin's JS path). Returns null when every reader
+ *  FAILED (vs "" = clipboard genuinely empty). */
+async function readClipboard(): Promise<string | null> {
+  try {
+    return await ipc.clipboardRead();
+  } catch {
+    /* fall through */
+  }
   try {
     return (await clipReadText()) ?? "";
   } catch {
-    try {
-      return await navigator.clipboard.readText();
-    } catch {
-      return "";
-    }
+    /* fall through */
+  }
+  try {
+    return await navigator.clipboard.readText();
+  } catch {
+    return null;
   }
 }
 
-/** Write text to the OS clipboard, with the same plugin-first strategy. */
-async function writeClipboard(text: string): Promise<void> {
+/** Write text to the OS clipboard, native-first. Returns false when every writer failed. */
+async function writeClipboard(text: string): Promise<boolean> {
+  try {
+    await ipc.clipboardWrite(text);
+    return true;
+  } catch {
+    /* fall through */
+  }
   try {
     await clipWriteText(text);
-    return;
+    return true;
   } catch {
-    try {
-      await navigator.clipboard.writeText(text);
-    } catch {
-      /* clipboard write blocked */
-    }
+    /* fall through */
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -69,7 +85,21 @@ async function pasteInto(instanceId: number): Promise<void> {
   const e = terms.get(instanceId);
   if (!e) return;
   const text = await readClipboard();
-  if (text) e.term.paste(text);
+  if (text) {
+    e.term.paste(text);
+    return;
+  }
+  if (text === "") return; // clipboard genuinely empty — nothing to do
+  // Every clipboard reader failed: fall back to a native paste. execCommand("paste")
+  // synthesizes a real `paste` event on the focused element; the container's capture
+  // listener (below) feeds it into the terminal. Works even when clipboard READ is blocked.
+  try {
+    e.term.focus();
+    if (document.execCommand("paste")) return;
+  } catch {
+    /* not supported */
+  }
+  useStore.getState().toast("error", "Paste failed — clipboard access is blocked. Try right-click → paste.");
 }
 
 async function copySelection(instanceId: number): Promise<void> {
@@ -77,7 +107,15 @@ async function copySelection(instanceId: number): Promise<void> {
   if (!e) return;
   const sel = e.term.getSelection();
   if (!sel) return;
-  await writeClipboard(sel);
+  if (await writeClipboard(sel)) return;
+  // fall back to a native copy; the container's `copy` capture listener supplies the
+  // terminal selection as the event data
+  try {
+    if (document.execCommand("copy")) return;
+  } catch {
+    /* not supported */
+  }
+  useStore.getState().toast("error", "Copy failed — clipboard access is blocked.");
 }
 
 function ensureEntry(instanceId: number): Entry {
@@ -108,9 +146,24 @@ function ensureEntry(instanceId: number): Entry {
     ipc.resizePty(instanceId, rows, cols).catch(() => {});
   });
 
-  // Copy / paste — WebView2's default terminal paste is unreliable, so wire it
-  // explicitly. Paste goes through term.paste() so bracketed-paste mode (which
-  // Claude Code relies on for multi-line input) is respected.
+  // Copy-on-select: any selection (plain drag, or SHIFT+drag while a TUI like Claude Code
+  // has mouse reporting on) lands on the clipboard automatically — no shortcut needed.
+  // Debounced so we copy once when the drag settles, not on every mousemove.
+  let selTimer: ReturnType<typeof setTimeout> | undefined;
+  term.onSelectionChange(() => {
+    clearTimeout(selTimer);
+    selTimer = setTimeout(() => {
+      const sel = term.getSelection();
+      if (sel) void writeClipboard(sel);
+    }, 250);
+  });
+
+  // Copy / paste — WebView2's default terminal paste is unreliable, so wire it in
+  // layers: (1) explicit shortcuts via xterm's key handler → clipboard plugin/browser
+  // API, (2) native `paste`/`copy` events captured on the container (covers the
+  // execCommand fallback and any OS-initiated paste), (3) right-click. Paste goes
+  // through term.paste() so bracketed-paste mode (which Claude Code relies on for
+  // multi-line input) is respected.
   term.attachCustomKeyEventHandler((ev) => {
     if (ev.type !== "keydown") return true;
     const key = ev.key.toLowerCase();
@@ -120,8 +173,8 @@ function ensureEntry(instanceId: number): Entry {
       void pasteInto(instanceId);
       return false;
     }
-    // Copy: Ctrl+Shift+C, or Ctrl+C while text is selected (else ^C passes through)
-    if (ev.ctrlKey && ev.shiftKey && key === "c") {
+    // Copy: Ctrl+Shift+C or Ctrl+Insert, or Ctrl+C while text is selected (else ^C passes)
+    if ((ev.ctrlKey && ev.shiftKey && key === "c") || (ev.ctrlKey && ev.key === "Insert")) {
       ev.preventDefault();
       void copySelection(instanceId);
       return false;
@@ -134,6 +187,29 @@ function ensureEntry(instanceId: number): Entry {
     }
     return true;
   });
+  // Native clipboard events (capture phase, so they win over xterm's own handlers and
+  // never double-paste). These fire for execCommand fallbacks and OS-level paste.
+  container.addEventListener(
+    "paste",
+    (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const text = ev.clipboardData?.getData("text/plain");
+      if (text) term.paste(text);
+    },
+    true,
+  );
+  container.addEventListener(
+    "copy",
+    (ev) => {
+      const sel = term.getSelection();
+      if (!sel) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      ev.clipboardData?.setData("text/plain", sel);
+    },
+    true,
+  );
   // Right-click: copy the selection if there is one, otherwise paste.
   container.addEventListener("contextmenu", (ev) => {
     ev.preventDefault();

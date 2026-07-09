@@ -76,6 +76,8 @@ pub struct Instance {
     pub account_name: String,
     pub project_name: Option<String>,
     pub mode: String,
+    /// "claude" (a Claude Code session) or "shell" (a plain PowerShell terminal).
+    pub kind: String,
     /// Operator mode: this instance delegates the work it's given to worker accounts.
     pub is_orchestrator: bool,
     pub worker_pool: Vec<i64>,

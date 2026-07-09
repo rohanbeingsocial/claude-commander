@@ -17,6 +17,8 @@ export interface LaunchPreset {
   projectId?: number;
   cwd?: string;
   mode?: string;
+  /** "claude" (default) or "shell" — plain PowerShell terminal. */
+  kind?: string;
 }
 
 interface ToastItem {

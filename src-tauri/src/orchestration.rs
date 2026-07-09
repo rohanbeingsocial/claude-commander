@@ -750,6 +750,47 @@ pub fn set_operator(
     Ok(())
 }
 
+/// True when a PID is still alive (best-effort, via tasklist).
+fn pid_alive(pid: i64) -> bool {
+    Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).contains(&format!("\"{pid}\"")))
+        .unwrap_or(true)
+}
+
+/// Boot-time reconciliation. Workers are plain child processes, so they survive a Commander
+/// crash/restart — but their monitor threads don't. Close the books on any worker row still
+/// marked "running": if its process is gone, classify it from its on-disk artifacts (a
+/// result.md means it finished); if it's still alive, leave it — progress.md keeps flowing
+/// and `collect` still works. Either way the work is never silently lost.
+pub fn reconcile_workers(conn: &Connection) {
+    let rows: Vec<(i64, Option<i64>, String)> = conn
+        .prepare("SELECT id, pid, folder FROM worker_tasks WHERE status='running'")
+        .and_then(|mut s| {
+            s.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+                .map(|rows| rows.flatten().collect())
+        })
+        .unwrap_or_default();
+    for (id, pid, folder) in rows {
+        let alive = pid.map(pid_alive).unwrap_or(false);
+        if alive {
+            continue;
+        }
+        let result = fs::read_to_string(Path::new(&folder).join("result.md"))
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        let status = if result.is_some() { "done" } else { "stopped" };
+        let summary = result.map(|s| crate::handover::truncate_chars(&s, 4000));
+        let _ = conn.execute(
+            "UPDATE worker_tasks SET status=?1, result_summary=coalesce(?2,result_summary), ended_at=coalesce(ended_at,?3) WHERE id=?4",
+            params![status, summary, db::now_str(), id],
+        );
+    }
+}
+
 // ---- MCP-facing helpers ----
 // These back the local MCP server (see mcp.rs). Each is scoped to one orchestrator instance
 // so a tool call can only ever touch that orchestrator's pool and its own workers.
@@ -859,6 +900,25 @@ pub fn delegate_from_orchestrator(
         db::get_setting(&conn, "worker_extra_args_default").unwrap_or_default()
     };
     delegate_core(app, Some(orch_id), account_id, &cwd, &prompt, model, &extra, &refs)
+}
+
+/// Adopt orphaned workers: re-parent workers (same cwd) whose orchestrator instance is dead
+/// onto the calling orchestrator, so a relaunched operator can poll/collect the previous
+/// operator's work instead of losing it. Returns how many workers were adopted.
+pub fn adopt_orphans(app: &AppHandle, orch_id: i64) -> Result<usize, String> {
+    let cwd = orchestrator_cwd(app, orch_id)?;
+    let state = app.state::<AppState>();
+    let conn = state.db.lock().unwrap();
+    let n = conn
+        .execute(
+            "UPDATE worker_tasks SET orchestrator_instance_id=?1 \
+             WHERE cwd=?2 AND (orchestrator_instance_id IS NULL OR orchestrator_instance_id IN ( \
+                 SELECT id FROM instances WHERE status NOT IN ('running','limit_hit') \
+             )) AND orchestrator_instance_id IS NOT ?1",
+            params![orch_id, cwd],
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(n)
 }
 
 /// Snapshot of an orchestrator's pool: each account with its live headroom and how many

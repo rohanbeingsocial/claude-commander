@@ -8,7 +8,21 @@ use std::fs;
 use std::os::windows::process::CommandExt;
 use std::path::Path;
 use std::process::Command;
-use tauri::State;
+use tauri::{AppHandle, State};
+use tauri_plugin_clipboard_manager::ClipboardExt;
+
+/// Clipboard via the Rust side of the clipboard plugin. The webview's own clipboard access
+/// (navigator.clipboard AND the plugin's JS invoke path) can be blocked by WebView2
+/// permission policy; this native path cannot.
+#[tauri::command]
+pub fn clipboard_read(app: AppHandle) -> Result<String, String> {
+    app.clipboard().read_text().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn clipboard_write(app: AppHandle, text: String) -> Result<(), String> {
+    app.clipboard().write_text(text).map_err(|e| e.to_string())
+}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]

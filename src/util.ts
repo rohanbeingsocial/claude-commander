@@ -79,3 +79,23 @@ export function basename(p: string): string {
   const parts = p.replace(/[\\/]+$/, "").split(/[\\/]/);
   return parts[parts.length - 1] || p;
 }
+
+/** Stable hue (0-359) for a working directory, so every terminal in the same
+ *  worktree gets the same shade and different worktrees get visibly different ones. */
+export function cwdHue(cwd: string): number {
+  const s = cwd.replace(/[\\/]+$/, "").toLowerCase();
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return h % 360;
+}
+
+/** The accent color for a worktree/cwd (used for terminal stripes and worktree dots). */
+export function cwdColor(cwd: string, alpha = 1): string {
+  return `hsla(${cwdHue(cwd)}, 65%, 55%, ${alpha})`;
+}
+
+/** Case/slash-insensitive path equality (Windows paths). */
+export function samePath(a: string, b: string): boolean {
+  const norm = (p: string) => p.replace(/[\\/]+$/, "").replace(/\//g, "\\").toLowerCase();
+  return norm(a) === norm(b);
+}

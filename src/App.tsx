@@ -32,7 +32,6 @@ export default function App() {
   const accounts = useStore((s) => s.accounts);
   const instances = useStore((s) => s.instances);
   const sidebarMode = useStore((s) => s.sidebarMode);
-  const cycleSidebar = useStore((s) => s.cycleSidebar);
   const setSidebarMode = useStore((s) => s.setSidebarMode);
   const taskPanelOpen = useStore((s) => s.taskPanelOpen);
   const toggleTaskPanel = useStore((s) => s.toggleTaskPanel);
@@ -125,7 +124,16 @@ export default function App() {
     >
       {sidebarMode !== "hidden" && (
         <aside className={`sidebar ${collapsed ? "sidebar-icons" : ""}`} style={{ gridColumn: 1 }}>
-          <div className="brand" title="Toggle sidebar (Ctrl+B)" onClick={cycleSidebar}>
+          <div
+            className="brand"
+            title="Toggle sidebar (Ctrl+B)"
+            onClick={(e) => {
+              // ignore the second click of a double-click so it can't skip past "icons"
+              // and hide the sidebar; clicking only toggles expanded ↔ icons
+              if (e.detail > 1) return;
+              setSidebarMode(sidebarMode === "expanded" ? "icons" : "expanded");
+            }}
+          >
             <span className="brand-mark">◉</span>
             {!collapsed && <span>COMMANDER</span>}
           </div>

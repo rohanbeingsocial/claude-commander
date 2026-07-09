@@ -135,12 +135,36 @@ export default function FileTree() {
 
   const refresh = () => setReloadKey((k) => k + 1);
 
+  // roots you can switch between: every registered project, the active terminal's
+  // folder, and whatever custom folder was last browsed to
+  const rootOptions: { label: string; path: string }[] = [];
+  const seen = new Set<string>();
+  const push = (label: string, path: string) => {
+    const k = path.toLowerCase();
+    if (!path || seen.has(k)) return;
+    seen.add(k);
+    rootOptions.push({ label, path });
+  };
+  for (const p of projects) push(p.name, p.rootPath);
+  if (activeCwd) push(`${basename(activeCwd)} (active terminal)`, activeCwd);
+  if (root) push(basename(root), root);
+
   return (
     <div className="file-tree">
       <div className="ft-head">
-        <span className="ft-title ellipsis" title={root}>
-          {root ? basename(root) : "Files"}
-        </span>
+        <select
+          className="ft-root-select"
+          title={root || "Pick a folder to explore"}
+          value={root}
+          onChange={(e) => e.target.value && setRootPersist(e.target.value)}
+        >
+          {!root && <option value="">Files…</option>}
+          {rootOptions.map((o) => (
+            <option key={o.path} value={o.path}>
+              {o.label}
+            </option>
+          ))}
+        </select>
         {activeCwd && activeCwd !== root && (
           <button className="icon-btn" title="Jump to active terminal's folder" onClick={() => setRootPersist(activeCwd)}>
             ◎

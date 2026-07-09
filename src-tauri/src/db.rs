@@ -129,6 +129,8 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     add_column(conn, "instances", "is_orchestrator", "INTEGER NOT NULL DEFAULT 0");
     add_column(conn, "instances", "worker_pool", "TEXT");
     add_column(conn, "instances", "use_own_agents", "INTEGER NOT NULL DEFAULT 0");
+    // 'claude' (default) or 'shell' — a plain PowerShell terminal with the account's env
+    add_column(conn, "instances", "kind", "TEXT NOT NULL DEFAULT 'claude'");
     Ok(())
 }
 

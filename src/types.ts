@@ -56,6 +56,8 @@ export interface Instance {
   accountName: string;
   projectName: string | null;
   mode: string;
+  /** "claude" (a Claude Code session) or "shell" (plain PowerShell terminal). */
+  kind: string;
   isOrchestrator: boolean;
   workerPool: number[];
   useOwnAgents: boolean;

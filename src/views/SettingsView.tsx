@@ -120,6 +120,7 @@ export default function SettingsView() {
 
   const autoFailover = settings.auto_failover === "1";
   const autoReassign = settings.auto_reassign === "1";
+  const autoWake = settings.auto_wake === "1";
   const usageTap = settings.usage_tap === "1";
 
   const toggleTap = async () => {
@@ -219,6 +220,16 @@ export default function SettingsView() {
           />
           Auto-reassign delegated workers — when a worker hits its limit, hand the remainder (with its progress) to the
           best worker account automatically instead of pausing to ask. Off = pause &amp; report (default).
+        </label>
+        <label className="radio">
+          <input
+            type="checkbox"
+            checked={autoWake}
+            onChange={(e) => setKey("auto_wake", e.target.checked ? "1" : "0")}
+          />
+          Auto-wake on limit reset — when a session is stuck at its usage limit (and wasn't failed over), relaunch it
+          on the same account with <code>--continue</code> the moment its window resets. Leave the PC running and the
+          work resumes by itself.
         </label>
         <div className="row" style={{ marginTop: 8 }}>
           <label className="inline-label">

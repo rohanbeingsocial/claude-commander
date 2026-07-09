@@ -19,7 +19,7 @@ import { useStore } from "../store";
 import { useDropdown } from "../useDropdown";
 import { disposeTerm, fitTerm, hasTerm } from "../terminals";
 import type { AccountUsage, Instance, Recommendation } from "../types";
-import { basename, duration, STATUS_LABEL } from "../util";
+import { basename, cwdColor, duration, STATUS_LABEL } from "../util";
 
 const MAX_CELLS = 16;
 const LS_KEY = "mosaicLayout";
@@ -149,6 +149,7 @@ function TileToolbar({
     return () => clearInterval(t);
   }, [inst.status]);
 
+  const isShell = inst.kind === "shell";
   const resume = async () => {
     setBusy(true);
     try {
@@ -156,7 +157,8 @@ function TileToolbar({
         accountId: inst.accountId,
         projectId: inst.projectId ?? undefined,
         cwd: inst.cwd,
-        mode: "continue",
+        mode: isShell ? "new" : "continue",
+        kind: inst.kind,
       });
       await refreshInstances();
       setActiveInstance(ni.id);
@@ -212,13 +214,27 @@ function TileToolbar({
   };
 
   const status = account?.status ?? inst.status;
+  // same worktree (cwd) → same shade; different worktrees → visibly different stripes
+  const wt = cwdColor(inst.cwd);
 
   return (
-    <div className={`cell-head ${active ? "cell-active" : ""}`} onMouseDown={onActivate}>
+    <div
+      className={`cell-head ${active ? "cell-active" : ""}`}
+      onMouseDown={onActivate}
+      style={{
+        boxShadow: `inset 3px 0 0 ${wt}`,
+        backgroundImage: `linear-gradient(90deg, ${cwdColor(inst.cwd, 0.12)}, transparent 45%)`,
+      }}
+    >
       <div className="cell-id ellipsis">
         <span className={`status-dot st-${status}`} />
         <strong>{inst.accountName}</strong>
-        <span className="dim small ellipsis" title={inst.cwd}>
+        {isShell && (
+          <span className="cell-shell" title="Plain PowerShell terminal — CLAUDE_CONFIG_DIR points at this account">
+            ⌨ SHELL
+          </span>
+        )}
+        <span className="dim small ellipsis" title={`Worktree: ${inst.cwd}`} style={{ color: wt }}>
           · {inst.projectName ?? basename(inst.cwd)}
         </span>
         {inst.isOrchestrator && (
@@ -233,8 +249,12 @@ function TileToolbar({
         )}
       </div>
       <div className="cell-usage">
-        <UsageMini label="5h" pct={account?.fiveHour.pct} live={account?.fiveHour.source === "live"} />
-        <UsageMini label="wk" pct={account?.weekly.pct} live={account?.weekly.source === "live"} />
+        {!isShell && (
+          <>
+            <UsageMini label="5h" pct={account?.fiveHour.pct} live={account?.fiveHour.source === "live"} />
+            <UsageMini label="wk" pct={account?.weekly.pct} live={account?.weekly.source === "live"} />
+          </>
+        )}
         <span className={`pill pill-mini st-${status}`}>{STATUS_LABEL[status] ?? status}</span>
         <span className="dim small" title="Session duration">
           {duration(inst.startedAt, isLive(inst) ? null : inst.endedAt)}
@@ -247,7 +267,7 @@ function TileToolbar({
           </button>
         ) : (
           <>
-            <button className="icon-btn" title="Resume (--continue)" onClick={resume} disabled={busy}>
+            <button className="icon-btn" title={isShell ? "Relaunch shell" : "Resume (--continue)"} onClick={resume} disabled={busy}>
               ▸
             </button>
             <button className="icon-btn danger" title="Close & remove" onClick={close}>
@@ -255,7 +275,7 @@ function TileToolbar({
             </button>
           </>
         )}
-        <div className="menu-anchor">
+        <div className="menu-anchor" style={isShell ? { display: "none" } : undefined}>
           <button
             ref={opBtnRef}
             className={`icon-btn ${inst.isOrchestrator ? "op-on" : ""}`}
@@ -330,10 +350,12 @@ function TileToolbar({
                 }}
               />
               <div className="menu-pop menu-pop-fixed" style={menuStyle} onMouseDown={(e) => e.stopPropagation()}>
+                {!isShell && (
                 <button className="menu-item" onClick={handover}>
                   Generate handover
                   <span className="dim small">write .project-memory/handover.md</span>
                 </button>
+                )}
                 <button
                   className="menu-item"
                   onClick={() => {
@@ -352,18 +374,22 @@ function TileToolbar({
                 >
                   Open external terminal
                 </button>
-                <div className="menu-sep">Failover to…</div>
-                {recs.map((r) => (
-                  <button
-                    key={r.accountId}
-                    className="menu-item"
-                    disabled={r.score <= 0 || busy}
-                    onClick={() => doFailover(r.accountId)}
-                  >
-                    {r.name}
-                    <span className="dim small">{r.reason}</span>
-                  </button>
-                ))}
+                {!isShell && (
+                  <>
+                    <div className="menu-sep">Failover to…</div>
+                    {recs.map((r) => (
+                      <button
+                        key={r.accountId}
+                        className="menu-item"
+                        disabled={r.score <= 0 || busy}
+                        onClick={() => doFailover(r.accountId)}
+                      >
+                        {r.name}
+                        <span className="dim small">{r.reason}</span>
+                      </button>
+                    ))}
+                  </>
+                )}
                 {isLive(inst) ? (
                   <button className="menu-item danger" onClick={kill}>
                     Kill session
@@ -388,6 +414,7 @@ function TileBody({ inst }: { inst: Instance }) {
   const toast = useStore((s) => s.toast);
   const [busy, setBusy] = useState(false);
 
+  const isShell = inst.kind === "shell";
   const resume = async () => {
     setBusy(true);
     try {
@@ -395,7 +422,8 @@ function TileBody({ inst }: { inst: Instance }) {
         accountId: inst.accountId,
         projectId: inst.projectId ?? undefined,
         cwd: inst.cwd,
-        mode: "continue",
+        mode: isShell ? "new" : "continue",
+        kind: inst.kind,
       });
       await refreshInstances();
       setActiveInstance(ni.id);
@@ -411,7 +439,7 @@ function TileBody({ inst }: { inst: Instance }) {
     <div className="cell-resume">
       <p className="dim small">Ran in a previous session (exit {inst.exitCode ?? "?"}).</p>
       <button className="btn btn-primary btn-sm" onClick={resume} disabled={busy}>
-        Resume on {inst.accountName}
+        {isShell ? `Relaunch shell (${inst.accountName})` : `Resume on ${inst.accountName}`}
       </button>
     </div>
   );
@@ -430,7 +458,8 @@ export default function TerminalGrid() {
 
   const grid = instances.slice(0, MAX_CELLS);
   const gridIds = grid.map((i) => i.id);
-  const acctFor = (id: number) => accounts.find((a) => a.id === id);
+  // NB: look up by ACCOUNT id, not instance id — this is what feeds the header usage bars
+  const acctFor = (accountId: number) => accounts.find((a) => a.id === accountId);
   const taskFor = (instanceId: number) =>
     tasks.find((t) => t.assignedInstanceId === instanceId && t.status === "active")?.title;
 
@@ -478,8 +507,12 @@ export default function TerminalGrid() {
       <button className="btn btn-primary btn-sm" onClick={() => openLaunch()}>
         + New Claude
       </button>
+      <button className="btn btn-sm" title="Plain PowerShell terminal (account env preloaded)" onClick={() => openLaunch({ kind: "shell" })}>
+        + Shell
+      </button>
       <span className="dim small">
-        {instances.filter(isLive).length} running · {grid.length} shown · drag headers to rearrange, borders to resize
+        {instances.filter(isLive).length} running · {grid.length} shown · Shift+drag selects text (auto-copies) ·
+        Ctrl+V pastes
       </span>
       {maximized && (
         <button className="btn btn-sm" onClick={() => setMaximized(null)}>
@@ -513,7 +546,7 @@ export default function TerminalGrid() {
         <div className="max-pane term-cell cell-active">
           <TileToolbar
             inst={maximized}
-            account={acctFor(maximized.id)}
+            account={acctFor(maximized.accountId)}
             taskTitle={taskFor(maximized.id)}
             isMax
             active
@@ -549,7 +582,7 @@ export default function TerminalGrid() {
                   <div className="cell-head-host">
                     <TileToolbar
                       inst={inst}
-                      account={acctFor(id)}
+                      account={acctFor(inst.accountId)}
                       taskTitle={taskFor(id)}
                       isMax={false}
                       active={id === activeInstanceId}

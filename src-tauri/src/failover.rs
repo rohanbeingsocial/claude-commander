@@ -82,6 +82,35 @@ pub fn pick_best(conn: &Connection, exclude: Option<i64>) -> Option<Recommendati
     recommend(conn, exclude).ok()?.into_iter().find(|r| r.score > 0.0)
 }
 
+/// The orchestration config of an instance, if it is an operator: (pool json, use_own_agents).
+fn orch_info(conn: &Connection, instance_id: i64) -> Option<(String, bool)> {
+    conn.query_row(
+        "SELECT worker_pool, use_own_agents FROM instances WHERE id=?1 AND is_orchestrator=1",
+        [instance_id],
+        |r| Ok((r.get::<_, Option<String>>(0)?.unwrap_or_else(|| "[]".into()), r.get::<_, i64>(1)? != 0)),
+    )
+    .ok()
+}
+
+/// After spawning a successor for a dead/limited orchestrator: mark the new instance as an
+/// operator with the same pool, bind the freshly minted MCP token to it, and re-parent the
+/// old instance's workers so `poll`/`collect` keep seeing them. Nothing is lost.
+fn carry_orchestration(app: &AppHandle, old_id: i64, new_id: i64, token: &str, pool_json: &str, use_own: bool) {
+    let state = app.state::<AppState>();
+    {
+        let conn = state.db.lock().unwrap();
+        let _ = conn.execute(
+            "UPDATE instances SET is_orchestrator=1, worker_pool=?1, use_own_agents=?2 WHERE id=?3",
+            params![pool_json, if use_own { 1 } else { 0 }, new_id],
+        );
+        let _ = conn.execute(
+            "UPDATE worker_tasks SET orchestrator_instance_id=?1 WHERE orchestrator_instance_id=?2",
+            params![new_id, old_id],
+        );
+    }
+    crate::mcp::register(app, token, new_id);
+}
+
 /// Move an instance's work to another account: copy the session transcript into the
 /// target account's config dir, then resume it there. Falls back to a fresh session
 /// primed with the generated handover file when no transcript exists.
@@ -90,6 +119,7 @@ pub fn failover_core(app: &AppHandle, instance_id: i64, to_account_id: i64, reas
     let (from_account_id, cwd, project_id): (i64, String, Option<i64>);
     let (from_cfg, from_name): (String, String);
     let (to_cfg, to_name, to_enabled): (String, String, bool);
+    let orch: Option<(String, bool)>;
     {
         let conn = state.db.lock().unwrap();
         let row = conn
@@ -98,6 +128,7 @@ pub fn failover_core(app: &AppHandle, instance_id: i64, to_account_id: i64, reas
             })
             .map_err(|_| "Instance not found".to_string())?;
         (from_account_id, cwd, project_id) = row;
+        orch = orch_info(&conn, instance_id);
         let row = conn
             .query_row("SELECT config_dir, name FROM accounts WHERE id=?1", [from_account_id], |r| {
                 Ok((r.get(0)?, r.get(1)?))
@@ -157,8 +188,28 @@ pub fn failover_core(app: &AppHandle, instance_id: i64, to_account_id: i64, reas
         );
     }
     crate::pty::kill_pty(app, instance_id);
+    crate::mcp::unregister_instance(app, instance_id);
 
-    let new_inst = crate::pty::spawn_claude(app, to_account_id, project_id, &cwd, &mode, "", init_prompt.as_deref(), None)?;
+    // an operator keeps its role: mint a fresh MCP config so the resumed session can still
+    // delegate, and re-parent its workers onto the successor
+    let prepared = match &orch {
+        Some((_, use_own)) => Some(crate::mcp::prepare_orchestrator(app, *use_own)?),
+        None => None,
+    };
+    let new_inst = crate::pty::spawn_claude(
+        app,
+        to_account_id,
+        project_id,
+        &cwd,
+        &mode,
+        "",
+        init_prompt.as_deref(),
+        prepared.as_ref().map(|(_, o)| o),
+        "claude",
+    )?;
+    if let (Some((pool_json, use_own)), Some((token, _))) = (&orch, &prepared) {
+        carry_orchestration(app, instance_id, new_inst.id, token, pool_json, *use_own);
+    }
 
     {
         let conn = state.db.lock().unwrap();
@@ -177,6 +228,108 @@ pub fn failover_core(app: &AppHandle, instance_id: i64, to_account_id: i64, reas
         },
     );
     Ok(new_inst)
+}
+
+/// Auto-wake: relaunch limit-stuck instances once their account's window has reset, so an
+/// unattended machine picks the work back up by itself. Runs from the background scanner
+/// when the `auto_wake` setting is on. Each stuck instance is resumed on the SAME account
+/// with `--continue` plus a nudge prompt (so Claude actually resumes instead of idling).
+pub fn auto_wake_tick(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let stuck: Vec<(i64, i64, Option<i64>, String)> = {
+        let conn = state.db.lock().unwrap();
+        if db::get_setting(&conn, "auto_wake").as_deref() != Some("1") {
+            return;
+        }
+        let Ok(mut stmt) = conn.prepare(
+            "SELECT id, account_id, project_id, cwd FROM instances WHERE status='limit_hit' AND archived=0 AND kind='claude'",
+        ) else {
+            return;
+        };
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .map(|rows| rows.flatten().collect())
+            .unwrap_or_default()
+    };
+
+    for (instance_id, account_id, project_id, cwd) in stuck {
+        // is the account usable again? (limit_hit_until passed and live/estimated pct sane)
+        let (ready, name) = {
+            let conn = state.db.lock().unwrap();
+            let Ok(account) = crate::accounts::get(&conn, account_id) else { continue };
+            let usable = usage::account_usage(&conn, &account, 0)
+                .map(|u| !matches!(u.status.as_str(), "limit_5h" | "limit_weekly" | "disabled"))
+                .unwrap_or(false);
+            (usable, account.name)
+        };
+        if !ready {
+            continue;
+        }
+
+        let orch = {
+            let conn = state.db.lock().unwrap();
+            orch_info(&conn, instance_id)
+        };
+        let prepared = match &orch {
+            Some((_, use_own)) => crate::mcp::prepare_orchestrator(app, *use_own).ok(),
+            None => None,
+        };
+        let prompt = "Your usage limit has reset (Commander auto-wake). Continue the work exactly where you left off; check .project-memory/ and any task progress files if you need to re-orient.";
+        match crate::pty::spawn_claude(
+            app,
+            account_id,
+            project_id,
+            &cwd,
+            "continue",
+            "",
+            Some(prompt),
+            prepared.as_ref().map(|(_, o)| o),
+            "claude",
+        ) {
+            Ok(new_inst) => {
+                {
+                    let conn = state.db.lock().unwrap();
+                    let _ = conn.execute(
+                        "UPDATE instances SET status='exited', archived=1, ended_at=coalesce(ended_at,?1) WHERE id=?2",
+                        params![db::now_str(), instance_id],
+                    );
+                }
+                crate::mcp::unregister_instance(app, instance_id);
+                if let (Some((pool_json, use_own)), Some((token, _))) = (&orch, &prepared) {
+                    carry_orchestration(app, instance_id, new_inst.id, token, pool_json, *use_own);
+                }
+                let _ = app.emit(
+                    "toast",
+                    crate::models::ToastMsg {
+                        level: "success".into(),
+                        message: format!("Auto-wake: {name} limit reset — session resumed"),
+                    },
+                );
+                let _ = app.emit(
+                    "failover-done",
+                    FailoverDone {
+                        from_instance_id: instance_id,
+                        new_instance_id: new_inst.id,
+                        from_account_id: account_id,
+                        to_account_id: account_id,
+                    },
+                );
+            }
+            Err(e) => {
+                // park it so a broken relaunch doesn't retry (and toast) every tick
+                {
+                    let conn = state.db.lock().unwrap();
+                    let _ = conn.execute(
+                        "UPDATE instances SET status='exited', ended_at=coalesce(ended_at,?1) WHERE id=?2",
+                        params![db::now_str(), instance_id],
+                    );
+                }
+                let _ = app.emit(
+                    "toast",
+                    crate::models::ToastMsg { level: "error".into(), message: format!("Auto-wake of {name} failed: {e}") },
+                );
+            }
+        }
+    }
 }
 
 // ---- commands ----

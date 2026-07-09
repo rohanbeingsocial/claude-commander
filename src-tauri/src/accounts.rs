@@ -260,10 +260,13 @@ pub fn boot(conn: &Connection) {
         ("scan_interval_secs", "60"),
         ("extra_args_default", ""),
         ("auto_reassign", "0"),
+        ("auto_wake", "0"),
         ("worker_extra_args_default", "--dangerously-skip-permissions"),
     ] {
         let _ = conn.execute("INSERT OR IGNORE INTO settings(key,value) VALUES(?1,?2)", params![k, v]);
     }
+    // close the books on workers whose monitor died with the previous Commander process
+    crate::orchestration::reconcile_workers(conn);
     let _ = discover(conn);
     // self-calibrate budgets from existing history so percentages are sane on first paint
     if let Ok(accts) = all(conn) {

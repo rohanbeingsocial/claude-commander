@@ -56,6 +56,7 @@ export const ipc = {
     isOrchestrator?: boolean;
     workerPool?: number[];
     useOwnAgents?: boolean;
+    kind?: string;
   }) => invoke<Instance>("launch_instance", args),
   writePty: (instanceId: number, data: string) => invoke<void>("write_pty", { instanceId, data }),
   resizePty: (instanceId: number, rows: number, cols: number) =>
@@ -127,6 +128,8 @@ export const ipc = {
   readTaskProgress: (taskId: number) => invoke<string>("read_task_progress", { taskId }),
 
   // misc
+  clipboardRead: () => invoke<string>("clipboard_read"),
+  clipboardWrite: (text: string) => invoke<void>("clipboard_write", { text }),
   getSettings: () => invoke<Record<string, string>>("get_settings"),
   setSetting: (key: string, value: string) => invoke<void>("set_setting", { key, value }),
   openInExplorer: (path: string) => invoke<void>("open_in_explorer", { path }),

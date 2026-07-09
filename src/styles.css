@@ -273,6 +273,29 @@ textarea {
   font-size: 13px;
   padding: 2px 4px;
 }
+/* root switcher: pick which project/folder the explorer shows */
+.ft-root-select {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--dim);
+  font-weight: 600;
+  background: transparent;
+  border: none;
+  padding: 0 2px;
+  cursor: pointer;
+}
+.ft-root-select:hover {
+  color: var(--text);
+}
+.ft-root-select option {
+  text-transform: none;
+  letter-spacing: normal;
+  background: var(--panel);
+  color: var(--text);
+}
 
 .ft-body {
   flex: 1;
@@ -1283,6 +1306,26 @@ textarea {
   border-radius: 6px;
   padding: 0 5px;
   line-height: 16px;
+}
+.cell-shell {
+  flex-shrink: 0;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: var(--dim);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0 5px;
+  line-height: 15px;
+}
+/* worktree color dot (Projects view) — matches the terminal header stripe */
+.wt-dot {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  margin-right: 7px;
+  vertical-align: middle;
 }
 
 .cell-usage {
