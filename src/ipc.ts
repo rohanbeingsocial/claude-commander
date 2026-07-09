@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { isDemoMode, makeDemoIpc } from "./demo";
 import type {
   AccountUsage,
   ClosureReport,
@@ -15,7 +16,7 @@ import type {
   Worktree,
 } from "./types";
 
-export const ipc = {
+const real = {
   // accounts
   listAccounts: () => invoke<AccountUsage[]>("list_accounts"),
   discoverAccounts: () => invoke<number>("discover_accounts"),
@@ -141,3 +142,9 @@ export const ipc = {
   installUsageTap: () => invoke<number>("install_usage_tap"),
   removeUsageTap: () => invoke<number>("remove_usage_tap"),
 };
+
+export type IpcApi = typeof real;
+
+/** The backend surface. In demo mode every call is answered from in-memory sample
+ *  data (src/demo.ts) — nothing signs in, runs, or touches disk. */
+export const ipc: IpcApi = isDemoMode() ? makeDemoIpc(real) : real;

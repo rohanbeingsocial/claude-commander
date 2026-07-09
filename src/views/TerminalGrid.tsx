@@ -14,6 +14,7 @@ import {
 } from "react-mosaic-component";
 import "react-mosaic-component/react-mosaic-component.css";
 import TerminalPane from "../components/TerminalPane";
+import { isDemoMode, setDemoMode } from "../demo";
 import { ipc } from "../ipc";
 import { useStore } from "../store";
 import { useDropdown } from "../useDropdown";
@@ -22,7 +23,8 @@ import type { AccountUsage, Instance, Recommendation } from "../types";
 import { basename, cwdColor, duration, STATUS_LABEL } from "../util";
 
 const MAX_CELLS = 16;
-const LS_KEY = "mosaicLayout";
+// demo instances get their own persisted layout so they never disturb the real grid
+const LS_KEY = isDemoMode() ? "mosaicLayout.demo" : "mosaicLayout";
 
 const isLive = (i: Instance) => i.status === "running" || i.status === "limit_hit";
 
@@ -533,6 +535,15 @@ export default function TerminalGrid() {
             <button className="btn btn-primary" onClick={() => openLaunch()}>
               + New Claude (Ctrl+N)
             </button>
+            {!isDemoMode() && (
+              <p className="dim small" style={{ marginTop: 14 }}>
+                Just looking around?{" "}
+                <button className="btn btn-sm" onClick={() => setDemoMode(true)}>
+                  Try demo mode
+                </button>{" "}
+                — sample accounts &amp; simulated terminals; nothing signs in or runs.
+              </p>
+            )}
           </div>
         </div>
       </div>

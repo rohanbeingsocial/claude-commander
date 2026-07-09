@@ -57,6 +57,13 @@ no telemetry — everything stays on your machine.
 
 ## What it looks like
 
+The **Accounts** view — one card per account with live 5-hour/weekly meters, reset
+countdowns, prompts-remaining estimates, and a best-pick hint (emails redacted):
+
+![Accounts view — per-account live usage meters and reset countdowns](screenshots/cc.png)
+
+And the overall layout:
+
 ```
 ┌────┬──────────────────────────────┬─────────────┐
 │ na │  Claude 1        Claude 2     │  TASKS      │
@@ -86,6 +93,7 @@ no telemetry — everything stays on your machine.
 | 🛟 **Crash recovery** | Worker bookkeeping is reconciled at boot after a crash, and a relaunched operator can **adopt** orphaned workers (and their progress) instead of losing them. |
 | 📁 **File explorer** | Sidebar file tree with a **root switcher** (any registered project, the active terminal's folder, or a custom folder), a ⟳ refresh that doesn't collapse the tree, and drag-any-file-onto-a-task linking. |
 | 💻 **Plain terminals** | Launch a plain PowerShell pane into the same grid, with the chosen account's `CLAUDE_CONFIG_DIR` preloaded — for git, builds, and quick checks beside your Claudes. |
+| 🎬 **Demo mode** | One click fills the app with sample accounts, tasks, workers and simulated terminals so you can explore every flow **without Claude Code installed or any account signed in**. Nothing runs, nothing is written; exit restores your real data. |
 | 🧠 **Project memory** | Auto-maintained `.project-memory\*.md` (summary, architecture, decisions, todos, handover, session-log) folded into handovers. |
 | 🌿 **Worktrees** | Create / launch / remove git worktrees under `<repo>-worktrees\<branch>` straight from the UI. |
 | 💾 **Session recovery** | The grid is persisted (SQLite). After a crash/reboot, terminals reappear as **Resume** cells (`claude --continue`). |
@@ -108,6 +116,10 @@ Windows 10 grab the [Evergreen runtime](https://developer.microsoft.com/microsof
 
 > Windows SmartScreen may warn on first run — the installer isn't code-signed yet. Click
 > **More info → Run anyway**, or build from source below if you'd rather compile it yourself.
+
+> **Just want a look?** You don't even need Claude Code: launch the app and click
+> **Try demo mode** (or **Settings → Demo mode**). It fills the grid with sample accounts and
+> simulated terminals — nothing signs in, nothing runs, nothing you type goes anywhere.
 
 ### Option B — build from source
 

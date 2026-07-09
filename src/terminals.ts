@@ -2,6 +2,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { listen } from "@tauri-apps/api/event";
 import { readText as clipReadText, writeText as clipWriteText } from "@tauri-apps/plugin-clipboard-manager";
+import { isDemoMode, onDemoPtyOut } from "./demo";
 import { ipc } from "./ipc";
 import { useStore } from "./store";
 import { b64decode, b64encodeText } from "./util";
@@ -67,8 +68,7 @@ let routingStarted = false;
 export async function initPtyRouting(): Promise<void> {
   if (routingStarted) return;
   routingStarted = true;
-  await listen<PtyOutEv>("pty-out", (e) => {
-    const { instanceId, data } = e.payload;
+  const route = ({ instanceId, data }: PtyOutEv) => {
     const entry = terms.get(instanceId);
     if (entry && entry.opened) {
       entry.term.write(b64decode(data));
@@ -78,7 +78,13 @@ export async function initPtyRouting(): Promise<void> {
       if (q.length > 2000) q.shift();
       pending.set(instanceId, q);
     }
-  });
+  };
+  if (isDemoMode()) {
+    // demo terminals are scripted in-process — no Tauri event to listen to
+    onDemoPtyOut(route);
+    return;
+  }
+  await listen<PtyOutEv>("pty-out", (e) => route(e.payload));
 }
 
 async function pasteInto(instanceId: number): Promise<void> {

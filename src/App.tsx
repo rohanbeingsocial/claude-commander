@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { DndProvider } from "react-dnd";
 import { DND_BACKEND, DND_OPTIONS } from "./dnd";
+import { isDemoMode, onDemoFailoverDone, onDemoInstancesChanged, setDemoMode } from "./demo";
 import FailoverModal from "./components/FailoverModal";
 import FileTree from "./components/FileTree";
 import LaunchModal from "./components/LaunchModal";
@@ -43,6 +44,22 @@ export default function App() {
     initPtyRouting();
     useStore.getState().refreshAll();
 
+    const onFailoverDone = (p: FailoverDoneEv) => {
+      const s = useStore.getState();
+      s.refreshInstances().then(() => {
+        s.setActiveInstance(p.newInstanceId);
+        s.setView("terminals");
+      });
+      s.refreshHandovers();
+      s.setLimitPrompt(null);
+    };
+
+    // demo mode: the backend events below never fire — the demo module's buses stand in
+    if (isDemoMode()) {
+      onDemoInstancesChanged(() => useStore.getState().refreshInstances());
+      onDemoFailoverDone(onFailoverDone);
+    }
+
     const subs: Promise<UnlistenFn>[] = [
       listen<AccountUsage[]>("usage-updated", (e) => useStore.getState().setAccounts(e.payload)),
       listen<PtyExitEv>("pty-exit", () => useStore.getState().refreshInstances()),
@@ -52,15 +69,7 @@ export default function App() {
         s.refreshAccounts();
         if (!e.payload.auto) s.setLimitPrompt(e.payload);
       }),
-      listen<FailoverDoneEv>("failover-done", (e) => {
-        const s = useStore.getState();
-        s.refreshInstances().then(() => {
-          s.setActiveInstance(e.payload.newInstanceId);
-          s.setView("terminals");
-        });
-        s.refreshHandovers();
-        s.setLimitPrompt(null);
-      }),
+      listen<FailoverDoneEv>("failover-done", (e) => onFailoverDone(e.payload)),
       listen<ToastEv>("toast", (e) => useStore.getState().toast(e.payload.level, e.payload.message)),
       listen("workers-updated", () => useStore.getState().refreshWorkers()),
     ];
@@ -86,9 +95,20 @@ export default function App() {
       }
     };
     window.addEventListener("keydown", onKey);
+
+    // demo mode has no background usage scanner pushing "usage-updated" events —
+    // poll instead so the header meters tick and delegated workers visibly finish
+    const demoTick = isDemoMode()
+      ? setInterval(() => {
+          useStore.getState().refreshAccounts();
+          useStore.getState().refreshWorkers();
+        }, 5000)
+      : undefined;
+
     return () => {
       subs.forEach((p) => p.then((un) => un()).catch(() => {}));
       window.removeEventListener("keydown", onKey);
+      if (demoTick) clearInterval(demoTick);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -207,6 +227,15 @@ export default function App() {
       <LaunchModal />
       <FailoverModal />
       <Toasts />
+      {isDemoMode() && (
+        <div className="demo-pill" title="Demo mode: sample data only. No account signs in, no claude.exe runs, and nothing you type is sent anywhere. Exit restores your real data (untouched).">
+          <span className="demo-pill-dot" />
+          DEMO — sample data · nothing signs in or runs
+          <button className="demo-pill-btn" onClick={() => setDemoMode(false)}>
+            Exit demo
+          </button>
+        </div>
+      )}
     </div>
     </DndProvider>
   );

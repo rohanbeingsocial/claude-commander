@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
+import { isDemoMode, setDemoMode } from "../demo";
 import { ipc } from "../ipc";
 import { useStore } from "../store";
 import type { AccountUsage } from "../types";
@@ -311,6 +312,21 @@ export default function SettingsView() {
         {accounts.map((a) => (
           <AccountRow key={a.id} account={a} />
         ))}
+      </div>
+
+      <div className="card settings-card">
+        <h3>Demo mode {isDemoMode() && <span className="pill pill-mini st-busy">active</span>}</h3>
+        <div className="info-box dim small">
+          Fills Commander with <strong>sample accounts, projects, tasks, workers and simulated terminals</strong> so
+          the layout, account adding, delegation and failover flows can be explored — for screenshots, demos, or
+          trying the app before installing Claude Code. <strong>Nothing is real:</strong> no account signs in, no{" "}
+          <code>claude.exe</code> is launched, nothing you type is sent anywhere, and nothing is written to disk.
+          Your real accounts, sessions and tasks are untouched and come back when you exit. (Reloading the app resets
+          the demo data.)
+        </div>
+        <button className="btn btn-sm" onClick={() => setDemoMode(!isDemoMode())}>
+          {isDemoMode() ? "Exit demo mode" : "Enter demo mode"}
+        </button>
       </div>
     </div>
   );
