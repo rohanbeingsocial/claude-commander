@@ -102,6 +102,27 @@ MCP tool names can't contain dots, so the dotted names below are exposed with un
 | `collect(worker_id)` | The full closure report (see §5) |
 | `broadcast_context(refs[], note?)` | Push shared memory/refs to the whole pool at once |
 
+### Peer identity — every instance is on the MCP server, not just orchestrators
+
+Every **non-shell** launch is minted a peer id **`CC<a>.<n>`** — `a` is the account's slot
+number (the trailing number of its config dir, so it matches the `cc`/`ccw` scripts) and `n`
+the lowest instance ordinal that account doesn't already have live (first instance of
+account 2 → `CC2.1`). The id is stored on the instance row (`peer_num`/`peer_label`), shown
+on the grid tile, and freed when the instance exits.
+
+Every **Claude** launch also gets its own bearer token + `--mcp-config` (same flow as
+orchestrators; the identity is stated in its `--append-system-prompt`), giving it three peer
+tools alongside any orchestrator tools:
+
+| Tool | Purpose |
+|---|---|
+| `whoami` | Your peer id, account, folder + the other live instances in the same folder |
+| `peers(all_folders?)` | Live Commander instances — same folder by default, everywhere with `all_folders` |
+| `message_peer(to, message)` | Type a note into another instance's terminal (arrives as its next user message, prefixed with the sender's peer id). Prompted to use it only when the user asks |
+
+Gemini/Codex terminals get a peer id (so Claude peers can see and message them) but no MCP
+config of their own. Delegation tools are refused server-side for non-orchestrator tokens.
+
 ## 4. The worker pool (UI)
 
 - The launch modal gains a **"Make this an orchestrator"** checkbox. When ticked, a
@@ -237,6 +258,14 @@ Workers inherit the orchestrator's memory without ingesting its raw transcript:
   transcript, which is huge and would burn the worker's window (defeating the whole point).
 - `broadcast_context` pushes shared refs to all workers at once when the orchestrator learns
   something all of them need.
+- **Shared project memory** (setting `shared_project_memory`, on by default): each account's
+  Claude Code auto-memory path for a folder (`<config>/projects/<slug>/memory`) is turned
+  into a directory link (junction) to **`.project-memory/memory` inside the project**, so
+  every account loads and writes the same MEMORY.md — nothing lives only inside one
+  account's config dir, and it survives crashes and account switches. On an account's first
+  launch its private memory is merged in (its original kept as `memory.pre-shared`).
+  Instances are prompted to sign memory entries with their peer id (e.g. `CC8.1`) so it's
+  clear which account learned what.
 
 ## 9. Suggested build order
 

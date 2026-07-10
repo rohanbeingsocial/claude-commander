@@ -137,6 +137,18 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             stuck_since TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_pool_members ON pool_members(pool_id, id);
+        CREATE TABLE IF NOT EXISTS pool_stages(
+            id INTEGER PRIMARY KEY,
+            pool_id INTEGER NOT NULL REFERENCES pools(id) ON DELETE CASCADE,
+            seq INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            kind TEXT NOT NULL DEFAULT 'work',
+            member_id INTEGER NOT NULL REFERENCES pool_members(id) ON DELETE CASCADE,
+            instructions TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'pending',
+            attempts INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_pool_stages ON pool_stages(pool_id, seq);
         "#,
     )?;
     // additive columns for existing databases (ignore "duplicate column" errors)
@@ -149,6 +161,10 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     add_column(conn, "instances", "use_own_agents", "INTEGER NOT NULL DEFAULT 0");
     // 'claude' (default) or 'shell' — a plain PowerShell terminal with the account's env
     add_column(conn, "instances", "kind", "TEXT NOT NULL DEFAULT 'claude'");
+    // peer identity minted at launch: CC<account slot>.<n> (e.g. CC2.1). peer_num is the
+    // per-account ordinal used to hand out the lowest free number; peer_label the full id.
+    add_column(conn, "instances", "peer_num", "INTEGER");
+    add_column(conn, "instances", "peer_label", "TEXT");
     // which CLI an account signs into: 'claude' (default) | 'gemini' | 'codex'
     add_column(conn, "accounts", "engine", "TEXT NOT NULL DEFAULT 'claude'");
     // which CLI a delegated worker runs (copied from its account at delegate time)

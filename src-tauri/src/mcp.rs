@@ -1,14 +1,18 @@
 //! Local MCP server. Commander hosts a tiny loopback HTTP server that speaks the MCP
-//! "Streamable HTTP" transport (JSON-RPC over POST). An instance launched *as an
-//! orchestrator* is pointed at it via `--mcp-config`, so the orchestrator Claude drives
-//! delegation itself — calling `delegate` / `poll` / `collect` / `workers_list` /
-//! `workers_usage` / `broadcast_context` — instead of a human doing it from the Workers
-//! tab, and (unless it opts into its own subagents) is launched with `--disallowedTools
-//! Task` so it *must* delegate through Commander. See docs/ORCHESTRATION.md.
+//! "Streamable HTTP" transport (JSON-RPC over POST). *Every* Claude instance Commander
+//! launches is pointed at it via `--mcp-config` and gets a peer identity `CC<a>.<n>`
+//! (account slot `a`, per-account instance ordinal `n`, e.g. CC2.1 = first instance of
+//! account 2). The peer tools — `whoami` / `peers` / `message_peer` — let instances in the
+//! same folder recognise each other and, when the user asks, talk by typing into each
+//! other's terminals. An instance launched *as an orchestrator* additionally gets the
+//! delegation tools — `delegate` / `poll` / `collect` / `workers_list` / `workers_usage` /
+//! `broadcast_context` — and (unless it opts into its own subagents) is launched with
+//! `--disallowedTools Task` so it *must* delegate through Commander. See
+//! docs/ORCHESTRATION.md.
 //!
-//! Security: bound to 127.0.0.1 only, and every request must carry the per-orchestrator
-//! bearer token minted at launch. The token maps to exactly one orchestrator instance, so a
-//! tool call can only ever touch that orchestrator's pool and its own workers.
+//! Security: bound to 127.0.0.1 only, and every request must carry the per-instance
+//! bearer token minted at launch. The token maps to exactly one instance, so a tool call
+//! can only ever act as that instance; delegation tools are refused for non-orchestrators.
 
 use crate::orchestration;
 use crate::state::AppState;
@@ -29,6 +33,28 @@ const SYSTEM_PROMPT: &str = "You are an orchestrator in Claude Commander. Delega
     for its reset or reassign the remainder. If you were relaunched after a previous operator \
     session died or hit its limit, call adopt_workers first to take over its workers and their \
     progress.";
+
+/// One-line identity sentence prepended to every Claude launch (peers and orchestrators)
+/// so the instance knows its own call sign without having to ask.
+pub fn identity_preamble(label: &str) -> String {
+    format!(
+        "You are {label} in Claude Commander (account {}, instance {} of that account).",
+        label.trim_start_matches("CC").split('.').next().unwrap_or("?"),
+        label.split('.').nth(1).unwrap_or("?")
+    )
+}
+
+/// System prompt for a plain (non-orchestrator) peer instance.
+fn peer_prompt(label: &str) -> String {
+    format!(
+        "{} Other Commander-managed instances may be open in this folder. Commander MCP tools: \
+        whoami tells you your identity and lists the peers in this folder, peers lists live \
+        instances (peers with all_folders true for everywhere), and message_peer types a note \
+        into another instance's terminal. Only message peers when the user asks you to \
+        coordinate with them.",
+        identity_preamble(label)
+    )
+}
 
 /// What pty.rs needs to launch an instance as an orchestrator.
 pub struct OrchestratorLaunch {
@@ -65,10 +91,10 @@ pub fn start(app: AppHandle) {
     });
 }
 
-/// Mint a per-session token, write the orchestrator's `--mcp-config` file, and return the
-/// launch spec. The token is registered against the instance id only after spawn (via
-/// `register`), which is well before Claude Code finishes booting and connects.
-pub fn prepare_orchestrator(app: &AppHandle, use_own_agents: bool) -> Result<(String, OrchestratorLaunch), String> {
+/// Mint a per-session token and write a `--mcp-config` file pointing at Commander's server.
+/// Shared by orchestrator and peer launches. The token is registered against the instance id
+/// only after spawn (via `register`), well before Claude Code finishes booting and connects.
+fn mint_config(app: &AppHandle) -> Result<(String, String), String> {
     let port = {
         let state = app.state::<AppState>();
         let guard = state.mcp.port.lock().unwrap();
@@ -81,6 +107,16 @@ pub fn prepare_orchestrator(app: &AppHandle, use_own_agents: bool) -> Result<(St
     let file_id = random_hex(6);
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?.join("mcp");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    // best-effort prune of configs left behind by long-gone sessions
+    if let Ok(rd) = std::fs::read_dir(&dir) {
+        if let Some(cutoff) = std::time::SystemTime::now().checked_sub(Duration::from_secs(3 * 24 * 3600)) {
+            for e in rd.flatten() {
+                if e.metadata().and_then(|m| m.modified()).map(|t| t < cutoff).unwrap_or(false) {
+                    let _ = std::fs::remove_file(e.path());
+                }
+            }
+        }
+    }
     let path = dir.join(format!("commander-{file_id}.json"));
     let cfg = json!({
         "mcpServers": {
@@ -92,14 +128,66 @@ pub fn prepare_orchestrator(app: &AppHandle, use_own_agents: bool) -> Result<(St
         }
     });
     std::fs::write(&path, serde_json::to_string_pretty(&cfg).unwrap()).map_err(|e| e.to_string())?;
+    Ok((token, path.to_string_lossy().to_string()))
+}
+
+/// Launch spec for an orchestrator: full delegation prompt (pty.rs prepends the identity
+/// line once the peer label is known) and Task disallowed unless it opted out.
+pub fn prepare_orchestrator(app: &AppHandle, use_own_agents: bool) -> Result<(String, OrchestratorLaunch), String> {
+    let (token, path) = mint_config(app)?;
     Ok((
         token,
         OrchestratorLaunch {
-            mcp_config_path: path.to_string_lossy().to_string(),
+            mcp_config_path: path,
             disallow_task: !use_own_agents,
             system_prompt: SYSTEM_PROMPT.to_string(),
         },
     ))
+}
+
+/// Launch spec for a plain peer instance: same server, identity prompt only, Task allowed.
+pub fn prepare_peer(app: &AppHandle, label: &str) -> Result<(String, OrchestratorLaunch), String> {
+    let (token, path) = mint_config(app)?;
+    Ok((
+        token,
+        OrchestratorLaunch { mcp_config_path: path, disallow_task: false, system_prompt: peer_prompt(label) },
+    ))
+}
+
+// ---- peer identity ----
+
+/// The account's user-facing number: the trailing digits of its config-dir folder (so CC2
+/// lines up with `~/.claude-accounts/2` and the cc/ccw scripts), falling back to the DB id.
+pub fn account_number(config_dir: &str, account_id: i64) -> i64 {
+    Path::new(config_dir)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .and_then(|s| s.trim_start_matches(|c: char| !c.is_ascii_digit()).parse::<i64>().ok())
+        .unwrap_or(account_id)
+}
+
+/// Lowest instance ordinal (1-based) not held by a live instance of this account, so the
+/// first instance of account 2 is CC2.1, a second concurrent one CC2.2, and numbers are
+/// re-used once an instance exits.
+pub fn next_peer_num(conn: &rusqlite::Connection, account_id: i64) -> i64 {
+    let mut used: Vec<i64> = conn
+        .prepare(
+            "SELECT peer_num FROM instances
+             WHERE account_id=?1 AND archived=0 AND status IN ('running','limit_hit') AND peer_num IS NOT NULL",
+        )
+        .and_then(|mut s| s.query_map([account_id], |r| r.get::<_, i64>(0)).map(|rows| rows.flatten().collect()))
+        .unwrap_or_default();
+    used.sort_unstable();
+    used.dedup();
+    let mut n = 1;
+    for u in used {
+        if u == n {
+            n += 1;
+        } else if u > n {
+            break;
+        }
+    }
+    n
 }
 
 pub fn register(app: &AppHandle, token: &str, instance_id: i64) {
@@ -119,16 +207,29 @@ fn lookup_token(app: &AppHandle, token: &str) -> Option<i64> {
     tokens.get(token).copied()
 }
 
-/// Server status for the UI: whether it's listening, on which loopback port, and how many
-/// orchestrators are currently connected (have live tokens).
+/// Server status for the UI: whether it's listening, on which loopback port, how many
+/// instances hold live tokens, and how many of those are orchestrators.
 #[tauri::command]
 pub fn mcp_status(state: tauri::State<'_, AppState>) -> Result<Value, String> {
     let port = *state.mcp.port.lock().unwrap();
-    let orchestrators = state.mcp.tokens.lock().unwrap().len();
+    let ids: Vec<i64> = state.mcp.tokens.lock().unwrap().values().copied().collect();
+    let orchestrators = if ids.is_empty() {
+        0
+    } else {
+        let id_list = ids.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(",");
+        let conn = state.db.lock().unwrap();
+        conn.query_row(
+            &format!("SELECT COUNT(*) FROM instances WHERE is_orchestrator=1 AND id IN ({id_list})"),
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+    };
     Ok(json!({
         "running": port != 0,
         "port": port,
         "url": if port != 0 { format!("http://127.0.0.1:{port}/mcp") } else { String::new() },
+        "connected": ids.len(),
         "orchestrators": orchestrators,
     }))
 }
@@ -192,10 +293,18 @@ fn handle_message(app: &AppHandle, instance_id: i64, msg: &Value) -> Option<Valu
     match method {
         "initialize" => Some(rpc_ok(id, initialize_result(&params))),
         "ping" => Some(rpc_ok(id, json!({}))),
-        "tools/list" => Some(rpc_ok(id, json!({ "tools": tool_defs() }))),
+        "tools/list" => Some(rpc_ok(id, json!({ "tools": tool_defs(is_orchestrator(app, instance_id)) }))),
         "tools/call" => Some(rpc_ok(id, call_tool(app, instance_id, &params))),
         _ => Some(rpc_error(id, -32601, &format!("method not found: {method}"))),
     }
+}
+
+fn is_orchestrator(app: &AppHandle, instance_id: i64) -> bool {
+    let state = app.state::<AppState>();
+    let conn = state.db.lock().unwrap();
+    conn.query_row("SELECT is_orchestrator FROM instances WHERE id=?1", [instance_id], |r| r.get::<_, i64>(0))
+        .map(|v| v != 0)
+        .unwrap_or(false)
 }
 
 fn initialize_result(params: &Value) -> Value {
@@ -210,7 +319,52 @@ fn initialize_result(params: &Value) -> Value {
 
 // ---- tools ----
 
-fn tool_defs() -> Value {
+/// Peer tools go to every instance; delegation tools only to orchestrators.
+fn tool_defs(is_orch: bool) -> Value {
+    let mut tools = peer_tool_defs();
+    if is_orch {
+        if let Value::Array(orch) = orch_tool_defs() {
+            if let Value::Array(list) = &mut tools {
+                list.extend(orch);
+            }
+        }
+    }
+    tools
+}
+
+fn peer_tool_defs() -> Value {
+    json!([
+        {
+            "name": "whoami",
+            "description": "Your Commander identity — peer id like CC2.1 (account 2, instance 1 of that account), account name, folder — plus the other live Commander instances open in the same folder.",
+            "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "peers",
+            "description": "List the other live Commander-managed instances (Claude/Gemini/Codex terminals) with their peer ids. Defaults to instances in your folder; pass all_folders for every folder.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "all_folders": { "type": "boolean", "description": "Include instances working in other folders too (default false)." }
+                }
+            }
+        },
+        {
+            "name": "message_peer",
+            "description": "Send a short note to another Commander instance by typing it into that instance's terminal (it arrives as its next user message, prefixed with your peer id). Use only when the user asks you to coordinate with a peer.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "to": { "type": "string", "description": "Target peer id like CC1.2 (works across folders), or an account name (same folder only)." },
+                    "message": { "type": "string", "description": "The note to deliver. Newlines are flattened to spaces." }
+                },
+                "required": ["to", "message"]
+            }
+        }
+    ])
+}
+
+fn orch_tool_defs() -> Value {
     json!([
         {
             "name": "workers_list",
@@ -286,22 +440,152 @@ fn tool_defs() -> Value {
 fn call_tool(app: &AppHandle, orch_id: i64, params: &Value) -> Value {
     let name = params.get("name").and_then(|n| n.as_str()).unwrap_or("");
     let args = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
-    let out: Result<Value, String> = match name {
-        "workers_list" => orchestration::mcp_pool_status(app, orch_id),
-        "workers_usage" => tool_workers_usage(app, orch_id, &args),
-        "delegate" => tool_delegate(app, orch_id, &args),
-        "poll" => tool_poll(app, orch_id, &args),
-        "collect" => tool_collect(app, orch_id, &args),
-        "adopt_workers" => orchestration::adopt_orphans(app, orch_id).map(|n| {
-            json!({ "adopted": n, "note": if n > 0 { "Adopted — poll now includes them." } else { "No orphaned workers found in this working directory." } })
-        }),
-        "broadcast_context" => tool_broadcast(app, orch_id, &args),
-        other => Err(format!("unknown tool: {other}")),
+    // delegation tools act on an orchestrator's pool — refuse them for plain peers
+    let orch_only = matches!(
+        name,
+        "workers_list" | "workers_usage" | "delegate" | "poll" | "collect" | "adopt_workers" | "broadcast_context"
+    );
+    let out: Result<Value, String> = if orch_only && !is_orchestrator(app, orch_id) {
+        Err("this tool is only available to orchestrator instances — this instance is a plain peer".into())
+    } else {
+        match name {
+            "whoami" => tool_whoami(app, orch_id),
+            "peers" => tool_peers(app, orch_id, &args),
+            "message_peer" => tool_message_peer(app, orch_id, &args),
+            "workers_list" => orchestration::mcp_pool_status(app, orch_id),
+            "workers_usage" => tool_workers_usage(app, orch_id, &args),
+            "delegate" => tool_delegate(app, orch_id, &args),
+            "poll" => tool_poll(app, orch_id, &args),
+            "collect" => tool_collect(app, orch_id, &args),
+            "adopt_workers" => orchestration::adopt_orphans(app, orch_id).map(|n| {
+                json!({ "adopted": n, "note": if n > 0 { "Adopted — poll now includes them." } else { "No orphaned workers found in this working directory." } })
+            }),
+            "broadcast_context" => tool_broadcast(app, orch_id, &args),
+            other => Err(format!("unknown tool: {other}")),
+        }
     };
     match out {
         Ok(v) => tool_result(v),
         Err(e) => json!({ "content": [{ "type": "text", "text": e }], "isError": true }),
     }
+}
+
+// ---- peer tools ----
+
+/// One live instance row as the peer tools see it.
+struct PeerRow {
+    id: i64,
+    label: String,
+    account: String,
+    kind: String,
+    status: String,
+    is_orchestrator: bool,
+    cwd: String,
+}
+
+/// All live (running or parked-at-limit), non-shell instances, oldest first.
+fn live_rows(app: &AppHandle) -> Result<Vec<PeerRow>, String> {
+    let state = app.state::<AppState>();
+    let conn = state.db.lock().unwrap();
+    let mut stmt = conn
+        .prepare(
+            "SELECT i.id, COALESCE(i.peer_label,''), a.name, i.kind, i.status, i.is_orchestrator, i.cwd
+             FROM instances i JOIN accounts a ON a.id=i.account_id
+             WHERE i.archived=0 AND i.status IN ('running','limit_hit') AND i.kind != 'shell'
+             ORDER BY i.id",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(PeerRow {
+                id: r.get(0)?,
+                label: r.get(1)?,
+                account: r.get(2)?,
+                kind: r.get(3)?,
+                status: r.get(4)?,
+                is_orchestrator: r.get::<_, i64>(5)? != 0,
+                cwd: r.get(6)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    Ok(rows.flatten().collect())
+}
+
+fn peer_json(p: &PeerRow, with_folder: bool) -> Value {
+    let mut v = json!({
+        "peer": p.label,
+        "account": p.account,
+        "kind": p.kind,
+        "status": p.status,
+        "orchestrator": p.is_orchestrator,
+    });
+    if with_folder {
+        v["folder"] = json!(p.cwd);
+    }
+    v
+}
+
+fn tool_whoami(app: &AppHandle, me_id: i64) -> Result<Value, String> {
+    let rows = live_rows(app)?;
+    let me = rows.iter().find(|p| p.id == me_id).ok_or("this instance is no longer registered")?;
+    let peers: Vec<Value> =
+        rows.iter().filter(|p| p.id != me_id && p.cwd == me.cwd).map(|p| peer_json(p, false)).collect();
+    Ok(json!({
+        "you": me.label,
+        "account": me.account,
+        "kind": me.kind,
+        "folder": me.cwd,
+        "orchestrator": me.is_orchestrator,
+        "peers_in_this_folder": peers,
+        "note": "Peer ids read CC<account>.<instance>. Use the peers tool to look further and message_peer to talk to one when the user asks.",
+    }))
+}
+
+fn tool_peers(app: &AppHandle, me_id: i64, args: &Value) -> Result<Value, String> {
+    let all = args.get("all_folders").and_then(|v| v.as_bool()).unwrap_or(false);
+    let rows = live_rows(app)?;
+    let me = rows.iter().find(|p| p.id == me_id).ok_or("this instance is no longer registered")?;
+    let peers: Vec<Value> = rows
+        .iter()
+        .filter(|p| p.id != me_id && (all || p.cwd == me.cwd))
+        .map(|p| peer_json(p, all))
+        .collect();
+    Ok(json!({
+        "you": me.label,
+        "folder": me.cwd,
+        "scope": if all { "all folders" } else { "this folder" },
+        "peers": peers,
+    }))
+}
+
+fn tool_message_peer(app: &AppHandle, me_id: i64, args: &Value) -> Result<Value, String> {
+    let to = args.get("to").and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty()).ok_or("`to` is required")?;
+    let message = args
+        .get("message")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().replace(['\r', '\n'], " "))
+        .filter(|s| !s.is_empty())
+        .ok_or("`message` is required")?;
+    let rows = live_rows(app)?;
+    let me = rows.iter().find(|p| p.id == me_id).ok_or("this instance is no longer registered")?;
+    // a peer id like CC1.2 is globally unique among live instances; an account name is
+    // resolved within this folder only (the same account may be open elsewhere too)
+    let target = rows
+        .iter()
+        .find(|p| p.id != me_id && p.label.eq_ignore_ascii_case(to))
+        .or_else(|| rows.iter().find(|p| p.id != me_id && p.cwd == me.cwd && p.account.eq_ignore_ascii_case(to)));
+    let Some(target) = target else {
+        let known: Vec<&str> = rows.iter().filter(|p| p.id != me_id).map(|p| p.label.as_str()).collect();
+        return Err(format!("no live peer matches '{to}' — live peer ids: {}", known.join(", ")));
+    };
+    let text = format!("[peer message from {} ({})] {message}", me.label, me.account);
+    crate::pty::inject_text(app, target.id, &text)?;
+    Ok(json!({
+        "delivered_to": target.label,
+        "account": target.account,
+        "folder": target.cwd,
+        "note": "Typed into that instance's terminal — it arrives as its next user message. Replies come back the same way, prefixed with the sender's peer id.",
+    }))
 }
 
 fn tool_workers_usage(app: &AppHandle, orch_id: i64, args: &Value) -> Result<Value, String> {
@@ -520,5 +804,41 @@ fn status_reason(status: u16) -> &'static str {
         200 => "OK",
         202 => "Accepted",
         _ => "OK",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn account_number_from_config_dir() {
+        assert_eq!(account_number(r"C:\Users\rohan\.claude-accounts\3", 9), 3);
+        assert_eq!(account_number("/home/rohan/.claude-accounts/12", 9), 12);
+        assert_eq!(account_number(r"D:\accounts\acct-2", 9), 2);
+        // no digits anywhere → fall back to the DB id
+        assert_eq!(account_number(r"C:\Users\rohan\.claude", 9), 9);
+    }
+
+    #[test]
+    fn peer_num_takes_lowest_free_ordinal() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE instances(id INTEGER PRIMARY KEY, account_id INTEGER, status TEXT,
+             archived INTEGER NOT NULL DEFAULT 0, peer_num INTEGER);",
+        )
+        .unwrap();
+        assert_eq!(next_peer_num(&conn, 1), 1);
+        conn.execute("INSERT INTO instances(account_id,status,peer_num) VALUES(1,'running',1)", []).unwrap();
+        assert_eq!(next_peer_num(&conn, 1), 2);
+        // a parked-at-limit instance still holds its number; gaps are filled first
+        conn.execute("INSERT INTO instances(account_id,status,peer_num) VALUES(1,'limit_hit',3)", []).unwrap();
+        assert_eq!(next_peer_num(&conn, 1), 2);
+        conn.execute("INSERT INTO instances(account_id,status,peer_num) VALUES(1,'running',2)", []).unwrap();
+        assert_eq!(next_peer_num(&conn, 1), 4);
+        // exited instances free their number; other accounts count independently
+        conn.execute("UPDATE instances SET status='exited' WHERE peer_num=1", []).unwrap();
+        assert_eq!(next_peer_num(&conn, 1), 1);
+        assert_eq!(next_peer_num(&conn, 2), 1);
     }
 }

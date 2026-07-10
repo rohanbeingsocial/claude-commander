@@ -15,7 +15,7 @@
 //! fresh session re-briefed from the board), and healthy peers are told to pick up a
 //! stuck member's tasks. That's what lets a pool keep running unattended.
 
-use crate::models::{Pool, PoolMember, ToastMsg};
+use crate::models::{Pool, PoolMember, PoolStage, ToastMsg};
 use crate::state::AppState;
 use crate::{db, usage};
 use rusqlite::{params, Connection, Row};
@@ -49,6 +49,30 @@ fn members_of(conn: &Connection, pool_id: i64) -> Vec<PoolMember> {
         .unwrap_or_default()
 }
 
+const STAGE_SELECT: &str = "SELECT s.id, s.pool_id, s.seq, s.name, s.kind, s.member_id, a.name, s.instructions, s.status, s.attempts \
+     FROM pool_stages s JOIN pool_members m ON m.id=s.member_id JOIN accounts a ON a.id=m.account_id";
+
+fn row_to_stage(r: &Row) -> rusqlite::Result<PoolStage> {
+    Ok(PoolStage {
+        id: r.get(0)?,
+        pool_id: r.get(1)?,
+        seq: r.get(2)?,
+        name: r.get(3)?,
+        kind: r.get(4)?,
+        member_id: r.get(5)?,
+        member_name: r.get(6)?,
+        instructions: r.get(7)?,
+        status: r.get(8)?,
+        attempts: r.get(9)?,
+    })
+}
+
+fn stages_of(conn: &Connection, pool_id: i64) -> Vec<PoolStage> {
+    conn.prepare(&format!("{STAGE_SELECT} WHERE s.pool_id=?1 ORDER BY s.seq"))
+        .and_then(|mut s| s.query_map([pool_id], row_to_stage).map(|rows| rows.flatten().collect()))
+        .unwrap_or_default()
+}
+
 fn get_pool(conn: &Connection, id: i64) -> Result<Pool, String> {
     let mut p = conn
         .query_row(
@@ -63,12 +87,37 @@ fn get_pool(conn: &Connection, id: i64) -> Result<Pool, String> {
                     status: r.get(4)?,
                     created_at: r.get(5)?,
                     members: Vec::new(),
+                    stages: Vec::new(),
                 })
             },
         )
         .map_err(|_| "Pool not found".to_string())?;
     p.members = members_of(conn, id);
+    p.stages = stages_of(conn, id);
     Ok(p)
+}
+
+/// Filesystem-safe slug for stage deliverable filenames.
+fn slug(text: &str) -> String {
+    let mut s: String = text
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
+        .collect();
+    while s.contains("--") {
+        s = s.replace("--", "-");
+    }
+    let s: String = s.trim_matches('-').chars().take(30).collect();
+    let s = s.trim_matches('-').to_string();
+    if s.is_empty() {
+        "stage".into()
+    } else {
+        s
+    }
+}
+
+/// Where a work stage's deliverable goes (repo-relative, used in prompts).
+fn stage_deliverable(pool_id: i64, st: &PoolStage) -> String {
+    format!("{}/stages/{}-{}.md", board_rel(pool_id), st.seq, slug(&st.name))
 }
 
 fn board_dir(cwd: &str, pool_id: i64) -> PathBuf {
@@ -99,8 +148,9 @@ fn briefing(pool: &Pool, me: &PoolMember, rejoin: bool) -> String {
     } else {
         ""
     };
-    format!(
-        "{rejoin_note}You are agent \"{name}\" in Commander pool \"{pool_name}\", working in this folder with peer agents. \
+    if pool.stages.is_empty() {
+        return format!(
+            "{rejoin_note}You are agent \"{name}\" in Commander pool \"{pool_name}\", working in this folder with peer agents. \
 Peers: {peers}.\n\
 \n\
 THE GOAL:\n{goal}\n\
@@ -113,6 +163,36 @@ How this pool works — follow it strictly:\n\
 5. If Commander reports a peer stuck at a usage limit, pick up that peer's unfinished `plan.md` tasks.\n\
 6. When ALL `plan.md` tasks are done, whoever finishes last writes the combined final output to `{board}/result.md` and announces it in `chat.md`.\n\
 Avoid editing the same source files as a peer at the same time — divide ownership in `plan.md`.",
+            name = me.account_name,
+            pool_name = pool.name,
+            goal = pool.goal.trim(),
+        );
+    }
+
+    // staged workflow: the ruleset is the law — Commander enforces whose turn it is
+    let stage_list: String = pool
+        .stages
+        .iter()
+        .map(|s| {
+            let yours = if s.member_id == me.id { "  ← YOU" } else { "" };
+            format!("  {}. [{}] \"{}\" — owner: {}{}\n", s.seq, s.kind, s.name, s.member_name, yours)
+        })
+        .collect();
+    format!(
+        "{rejoin_note}You are agent \"{name}\" in Commander pool \"{pool_name}\", working in this folder with peer agents. \
+Peers: {peers}.\n\
+\n\
+THE GOAL:\n{goal}\n\
+\n\
+This pool runs a STAGED WORKFLOW — a ruleset enforced by Commander (the app). The stages, in order:\n\
+{stage_list}\
+Rules — follow them strictly:\n\
+1. Exactly ONE stage is active at a time. Commander types a message into your terminal when a stage becomes YOURS, with exact file instructions. Do NOT work ahead of your turn.\n\
+2. While it is not your turn: stay idle, except to answer questions addressed to you in `{board}/chat.md` (answer by appending to it, entries start with `## {name} — <subject>`).\n\
+3. Stage deliverables live in `{board}/stages/`; hand-offs happen via small signal files in `{board}/signals/` — Commander's message names the exact files each time.\n\
+4. Review stages gate progress: the reviewer cross-questions the author in `chat.md`, then either approves or demands revisions — Commander sends the work back to the author automatically until the reviewer approves.\n\
+5. Announce every completed stage in `chat.md` (what you did, where it lives).\n\
+6. The final stage's owner also writes the combined final output to `{board}/result.md`.",
         name = me.account_name,
         pool_name = pool.name,
         goal = pool.goal.trim(),
@@ -123,6 +203,10 @@ Avoid editing the same source files as a peer at the same time — divide owners
 fn ensure_board(pool: &Pool) -> Result<(), String> {
     let dir = board_dir(&pool.cwd, pool.id);
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    if !pool.stages.is_empty() {
+        fs::create_dir_all(dir.join("stages")).map_err(|e| e.to_string())?;
+        fs::create_dir_all(dir.join("signals")).map_err(|e| e.to_string())?;
+    }
     let goal = dir.join("goal.md");
     fs::write(&goal, format!("# Pool goal — {}\n\n{}\n", pool.name, pool.goal.trim())).map_err(|e| e.to_string())?;
     let seed = |name: &str, content: String| {
@@ -205,6 +289,18 @@ pub struct PoolMemberSpec {
     pub model: String,
 }
 
+/// A stage spec at creation time; `member_index` points into the members array.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PoolStageSpec {
+    pub name: String,
+    /// "work" | "review"
+    pub kind: String,
+    pub member_index: usize,
+    #[serde(default)]
+    pub instructions: String,
+}
+
 #[tauri::command]
 pub fn create_pool(
     state: State<'_, AppState>,
@@ -212,6 +308,7 @@ pub fn create_pool(
     cwd: String,
     goal: String,
     members: Vec<PoolMemberSpec>,
+    stages: Option<Vec<PoolStageSpec>>,
 ) -> Result<Pool, String> {
     if !Path::new(&cwd).is_dir() {
         return Err(format!("Folder does not exist: {cwd}"));
@@ -222,15 +319,37 @@ pub fn create_pool(
     if members.is_empty() {
         return Err("Pick at least one member account".into());
     }
+    let stages = stages.unwrap_or_default();
+    for (i, s) in stages.iter().enumerate() {
+        if s.member_index >= members.len() {
+            return Err(format!("Stage {} has no owner — pick a member for it", i + 1));
+        }
+        if s.kind != "work" && s.kind != "review" {
+            return Err(format!("Stage {} kind must be work or review", i + 1));
+        }
+        if i == 0 && s.kind == "review" {
+            return Err("The first stage can't be a review — there is nothing to review yet".into());
+        }
+    }
     let name = if name.trim().is_empty() { "Pool".to_string() } else { name.trim().to_string() };
     let conn = state.db.lock().unwrap();
     conn.execute("INSERT INTO pools(name, cwd, goal) VALUES(?1,?2,?3)", params![name, cwd, goal])
         .map_err(|e| e.to_string())?;
     let pool_id = conn.last_insert_rowid();
+    let mut member_ids: Vec<i64> = Vec::new();
     for m in &members {
         conn.execute(
             "INSERT INTO pool_members(pool_id, account_id, model) VALUES(?1,?2,?3)",
             params![pool_id, m.account_id, m.model.trim()],
+        )
+        .map_err(|e| e.to_string())?;
+        member_ids.push(conn.last_insert_rowid());
+    }
+    for (i, s) in stages.iter().enumerate() {
+        let title = if s.name.trim().is_empty() { format!("Stage {}", i + 1) } else { s.name.trim().to_string() };
+        conn.execute(
+            "INSERT INTO pool_stages(pool_id, seq, name, kind, member_id, instructions) VALUES(?1,?2,?3,?4,?5,?6)",
+            params![pool_id, (i + 1) as i64, title, s.kind, member_ids[s.member_index], s.instructions.trim()],
         )
         .map_err(|e| e.to_string())?;
     }
@@ -278,9 +397,23 @@ pub fn start_pool(app: AppHandle, pool_id: i64) -> Result<Pool, String> {
     {
         let conn = state.db.lock().unwrap();
         let _ = conn.execute("UPDATE pools SET status='running' WHERE id=?1", [pool_id]);
+        // staged workflow: make sure exactly the first pending stage is live; the tick
+        // then nudges its owner with the exact instructions
+        if !pool.stages.is_empty() {
+            let has_active: bool = conn
+                .query_row("SELECT 1 FROM pool_stages WHERE pool_id=?1 AND status='active'", [pool_id], |_| Ok(()))
+                .is_ok();
+            if !has_active {
+                let _ = conn.execute(
+                    "UPDATE pool_stages SET status='active' WHERE id=(SELECT id FROM pool_stages WHERE pool_id=?1 AND status='pending' ORDER BY seq LIMIT 1)",
+                    [pool_id],
+                );
+            }
+        }
     }
     if errs.is_empty() {
-        toast(&app, "success", format!("Pool “{}”: {started} agent(s) launched — they'll organize on the board", pool.name));
+        let how = if pool.stages.is_empty() { "they'll organize on the board" } else { "the workflow starts at stage 1" };
+        toast(&app, "success", format!("Pool “{}”: {started} agent(s) launched — {how}", pool.name));
     } else {
         toast(&app, "warn", format!("Pool “{}”: {started} launched, {} failed — {}", pool.name, errs.len(), errs.join("; ")));
     }
@@ -368,9 +501,171 @@ struct PumpState {
     last_nudge: HashMap<i64, i64>,
     /// member ids whose current stuckness was already announced to peers
     stuck_announced: HashMap<i64, bool>,
+    /// stage id → (attempts, instance_id) the turn-nudge was already sent for
+    stage_nudged: HashMap<i64, (i64, i64)>,
 }
 
 static PUMP: LazyLock<Mutex<HashMap<i64, PumpState>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Compose the single-line turn message for the active stage's owner.
+fn stage_nudge_text(pool_id: i64, stages: &[PoolStage], st: &PoolStage) -> String {
+    let board = board_rel(pool_id);
+    let one_line = |s: &str| s.replace(['\r', '\n'], " ").trim().to_string();
+    let extra = {
+        let i = one_line(&st.instructions);
+        if i.is_empty() { String::new() } else { format!(" {i}") }
+    };
+    if st.kind == "review" {
+        let target = stages
+            .iter()
+            .rev()
+            .find(|s| s.seq < st.seq && s.kind == "work")
+            .map(|p| stage_deliverable(pool_id, p))
+            .unwrap_or_else(|| format!("{board}/stages/"));
+        format!(
+            "[Commander] Stage {seq} \"{name}\" is YOURS now: review {target} against {board}/goal.md and the discussion in {board}/chat.md.{extra} \
+Cross-question the author by appending to {board}/chat.md if anything is unclear or missing (they are nudged automatically and will answer there). \
+When satisfied, create {board}/signals/stage-{seq}-verdict.md starting with the word APPROVED. \
+To demand changes instead, start that file with REVISE followed by the exact required changes.",
+            seq = st.seq,
+            name = st.name,
+        )
+    } else if st.attempts > 0 {
+        format!(
+            "[Commander] Revisions were requested on your stage {seq} \"{name}\" (round {round}). \
+Read {board}/signals/stage-{seq}-revisions-round-{round}.md, apply the changes to {deliverable}, answer any open questions in {board}/chat.md, \
+then re-create {board}/signals/stage-{seq}-done.md to resubmit for review.",
+            seq = st.seq,
+            name = st.name,
+            round = st.attempts,
+            deliverable = stage_deliverable(pool_id, st),
+        )
+    } else {
+        format!(
+            "[Commander] Stage {seq} \"{name}\" is YOURS now.{extra} \
+Write your deliverable to {deliverable}, announce it in {board}/chat.md, \
+then create {board}/signals/stage-{seq}-done.md containing a 3-line summary — that hands the workflow to the next stage.",
+            seq = st.seq,
+            name = st.name,
+            deliverable = stage_deliverable(pool_id, st),
+        )
+    }
+}
+
+/// The staged-workflow referee, one pass per tick: detect signal files, advance approved
+/// stages, bounce REVISE back to the author, stall after too many rounds, and make sure
+/// the active stage's owner has been told it's their turn.
+fn stage_machine(app: &AppHandle, pool_id: i64, pool_name: &str, cwd: &str, entry: &mut PumpState) {
+    let state = app.state::<AppState>();
+    let stages = {
+        let conn = state.db.lock().unwrap();
+        stages_of(&conn, pool_id)
+    };
+    if stages.is_empty() {
+        return;
+    }
+    let signals = board_dir(cwd, pool_id).join("signals");
+
+    if let Some(active) = stages.iter().find(|s| s.status == "active") {
+        if active.kind == "review" {
+            let verdict_path = signals.join(format!("stage-{}-verdict.md", active.seq));
+            if verdict_path.exists() {
+                let verdict = fs::read_to_string(&verdict_path).unwrap_or_default();
+                if verdict.trim_start().to_lowercase().starts_with("approved") {
+                    let conn = state.db.lock().unwrap();
+                    let _ = conn.execute("UPDATE pool_stages SET status='done' WHERE id=?1", [active.id]);
+                    toast(app, "success", format!("Pool “{pool_name}”: stage {} “{}” APPROVED by {}", active.seq, active.name, active.member_name));
+                    let _ = app.emit("pools-updated", pool_id);
+                } else if let Some(prev) = stages.iter().rev().find(|s| s.seq < active.seq && s.kind == "work") {
+                    let rounds = prev.attempts + 1;
+                    if rounds > 4 {
+                        let conn = state.db.lock().unwrap();
+                        let _ = conn.execute("UPDATE pools SET status='stalled' WHERE id=?1", [pool_id]);
+                        toast(
+                            app,
+                            "error",
+                            format!("Pool “{pool_name}” stalled: stage {} “{}” was sent back {rounds} times — it needs your decision (see the board, then Restart)", prev.seq, prev.name),
+                        );
+                        let _ = app.emit("pools-updated", pool_id);
+                        return;
+                    }
+                    // hand the verdict to the author and reopen their stage
+                    let round_file = signals.join(format!("stage-{}-revisions-round-{rounds}.md", prev.seq));
+                    let _ = fs::rename(&verdict_path, &round_file);
+                    let _ = fs::remove_file(signals.join(format!("stage-{}-done.md", prev.seq)));
+                    {
+                        let conn = state.db.lock().unwrap();
+                        let _ = conn.execute("UPDATE pool_stages SET status='pending' WHERE id=?1", [active.id]);
+                        let _ = conn.execute("UPDATE pool_stages SET status='active', attempts=?1 WHERE id=?2", params![rounds, prev.id]);
+                    }
+                    toast(app, "info", format!("Pool “{pool_name}”: {} requested revisions — back to {} (round {rounds})", active.member_name, prev.member_name));
+                    let _ = app.emit("pools-updated", pool_id);
+                } else {
+                    // review with nothing before it — treat the verdict as approval
+                    let conn = state.db.lock().unwrap();
+                    let _ = conn.execute("UPDATE pool_stages SET status='done' WHERE id=?1", [active.id]);
+                }
+            }
+        } else {
+            let done_path = signals.join(format!("stage-{}-done.md", active.seq));
+            if done_path.exists() {
+                let conn = state.db.lock().unwrap();
+                let _ = conn.execute("UPDATE pool_stages SET status='done' WHERE id=?1", [active.id]);
+                toast(app, "info", format!("Pool “{pool_name}”: stage {} “{}” finished by {}", active.seq, active.name, active.member_name));
+                let _ = app.emit("pools-updated", pool_id);
+            }
+        }
+    }
+
+    // re-read after any transition: activate the next pending stage, or finish the pool
+    let stages = {
+        let conn = state.db.lock().unwrap();
+        stages_of(&conn, pool_id)
+    };
+    let active = stages.iter().find(|s| s.status == "active");
+    if active.is_none() {
+        if stages.iter().all(|s| s.status == "done") {
+            let conn = state.db.lock().unwrap();
+            let _ = conn.execute("UPDATE pools SET status='done' WHERE id=?1", [pool_id]);
+            drop(conn);
+            toast(app, "success", format!("Pool “{pool_name}”: workflow complete — all stages done"));
+            let _ = app.emit("pools-updated", pool_id);
+            return;
+        }
+        let conn = state.db.lock().unwrap();
+        let _ = conn.execute(
+            "UPDATE pool_stages SET status='active' WHERE id=(SELECT id FROM pool_stages WHERE pool_id=?1 AND status='pending' ORDER BY seq LIMIT 1)",
+            [pool_id],
+        );
+    }
+
+    // make sure the active stage's owner knows it's their turn (once per attempt+instance;
+    // a member relaunched by the medic gets the message again automatically)
+    let stages = {
+        let conn = state.db.lock().unwrap();
+        stages_of(&conn, pool_id)
+    };
+    let Some(active) = stages.iter().find(|s| s.status == "active") else { return };
+    let owner: Option<(Option<i64>, String)> = {
+        let conn = state.db.lock().unwrap();
+        conn.query_row("SELECT instance_id, status FROM pool_members WHERE id=?1", [active.member_id], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
+        .ok()
+    };
+    let Some((Some(instance_id), status)) = owner else { return };
+    if status != "running" {
+        return; // the medic will bring them back, then we nudge
+    }
+    let already = entry.stage_nudged.get(&active.id).copied() == Some((active.attempts, instance_id));
+    if already {
+        return;
+    }
+    let msg = stage_nudge_text(pool_id, &stages, active);
+    if crate::pty::inject_text(app, instance_id, &msg).is_ok() {
+        entry.stage_nudged.insert(active.id, (active.attempts, instance_id));
+    }
+}
 
 /// Cheap change signature for the board: sizes + mtimes of chat.md and plan.md.
 fn board_signature(dir: &Path) -> u64 {
@@ -440,7 +735,11 @@ pub fn pool_tick(app: &AppHandle) {
             board_sig: board_signature(&dir),
             last_nudge: HashMap::new(),
             stuck_announced: HashMap::new(),
+            stage_nudged: HashMap::new(),
         });
+
+        // staged workflow: process signals, advance/bounce stages, nudge the owner in turn
+        stage_machine(app, pool_id, &pool_name, &cwd, entry);
 
         // medic: wake limit-stuck members whose window is back
         for m in members.iter().filter(|m| m.status == "limit_stuck") {

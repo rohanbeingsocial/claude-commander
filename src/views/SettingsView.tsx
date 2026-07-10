@@ -335,6 +335,17 @@ export default function SettingsView() {
           haiku prompt each time, ~5x/day per account). Uses accounts with live usage data (the status-line tap), so
           Commander knows a window really closed rather than the account being signed out.
         </label>
+        <label className="radio">
+          <input
+            type="checkbox"
+            checked={settings.shared_project_memory === "1"}
+            onChange={(e) => setKey("shared_project_memory", e.target.checked ? "1" : "0")}
+          />
+          Shared project memory — every account working in a folder reads and writes the same Claude memory,
+          kept in the project itself at <code>.project-memory/memory</code> (so it survives crashes and account
+          switches). Each account's private memory is merged in on first launch and instances sign entries with
+          their peer id (e.g. CC8.1). Applies to newly launched instances.
+        </label>
         <div className="row" style={{ marginTop: 6 }}>
           <button className="btn btn-sm" onClick={warmNow} title="Open the 5-hour window on every enabled account whose window is closed">
             ⏱ Warm up all accounts now

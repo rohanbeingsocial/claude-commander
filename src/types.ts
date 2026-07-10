@@ -64,6 +64,8 @@ export interface Instance {
   isOrchestrator: boolean;
   workerPool: number[];
   useOwnAgents: boolean;
+  /** Peer identity like "CC2.1" (account slot . instance ordinal); null for shells. */
+  peerLabel: string | null;
 }
 
 export interface Task {
@@ -207,10 +209,29 @@ export interface Pool {
   name: string;
   cwd: string;
   goal: string;
-  /** idle | running | done | stopped */
+  /** idle | running | done | stopped | stalled */
   status: string;
   createdAt: string;
   members: PoolMember[];
+  /** Optional staged workflow (ordered). Empty = free-form pool. */
+  stages: PoolStage[];
+}
+
+/** One stage of a pool's ruleset — Commander enforces the pipeline and the review gates. */
+export interface PoolStage {
+  id: number;
+  poolId: number;
+  seq: number;
+  name: string;
+  /** "work" | "review" */
+  kind: string;
+  memberId: number;
+  memberName: string;
+  instructions: string;
+  /** pending | active | done */
+  status: string;
+  /** revision rounds a work stage has been through */
+  attempts: number;
 }
 
 export interface PoolMember {

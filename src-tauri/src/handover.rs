@@ -19,6 +19,156 @@ pub fn memory_dir(cwd: &str) -> PathBuf {
     Path::new(cwd).join(".project-memory")
 }
 
+// ---- shared per-project Claude memory ----
+
+/// Where a folder's shared Claude auto-memory lives: `.project-memory/memory` inside the
+/// project itself — so it survives app crashes/reinstalls, travels with the project, and
+/// is plainly visible to the user instead of buried in one account's config dir.
+pub fn shared_memory_dir(cwd: &str) -> PathBuf {
+    memory_dir(cwd).join("memory")
+}
+
+/// Point this account's Claude Code auto-memory for `cwd` at the folder-shared memory dir,
+/// so every account working in the folder loads and writes the *same* MEMORY.md. The
+/// account's own `<config>/projects/<slug>/memory` becomes a directory link (a junction on
+/// Windows — no admin rights needed); any memory it already had is merged into the shared
+/// dir first and the original kept beside it as `memory.pre-shared`. Idempotent per launch.
+pub fn ensure_shared_memory(config_dir: &str, cwd: &str, account_name: &str) -> Result<(), String> {
+    let shared = shared_memory_dir(cwd);
+    fs::create_dir_all(&shared).map_err(|e| format!("creating {}: {e}", shared.display()))?;
+    let proj_dir = Path::new(config_dir).join("projects").join(crate::failover::sanitize_path(cwd));
+    let link = proj_dir.join("memory");
+
+    // already pointing at the shared dir? (canonicalize resolves junctions and symlinks)
+    if let (Ok(a), Ok(b)) = (fs::canonicalize(&link), fs::canonicalize(&shared)) {
+        if a == b {
+            return Ok(());
+        }
+    }
+    if let Ok(meta) = fs::symlink_metadata(&link) {
+        if meta.file_type().is_symlink() {
+            // dangling or pointing somewhere else — drop the link itself, never its target
+            fs::remove_dir(&link).map_err(|e| format!("removing stale memory link: {e}"))?;
+        } else if meta.is_dir() {
+            // the account has private memory here: fold it into the shared dir, keep the
+            // original untouched as a backup, then replace the path with the link
+            merge_memory(&link, &shared, account_name)?;
+            let bak = unique_sibling(&proj_dir, "memory.pre-shared");
+            fs::rename(&link, &bak).map_err(|e| format!("moving old memory aside: {e}"))?;
+        }
+    }
+    fs::create_dir_all(&proj_dir).map_err(|e| e.to_string())?;
+    link_dir(&link, &shared)
+}
+
+/// Fold one account's private memory dir into the shared one. Files keep their names; a
+/// second MEMORY.md is appended under a "merged from" marker; a name that already exists
+/// in the shared dir is left alone (the account's copy stays readable in its backup dir).
+fn merge_memory(src: &Path, dst: &Path, account: &str) -> Result<(), String> {
+    fs::create_dir_all(dst).map_err(|e| e.to_string())?;
+    let entries = fs::read_dir(src).map_err(|e| e.to_string())?;
+    for e in entries.flatten() {
+        let from = e.path();
+        let to = dst.join(e.file_name());
+        if from.is_dir() {
+            merge_memory(&from, &to, account)?;
+        } else if e.file_name() == "MEMORY.md" && to.exists() {
+            let old = fs::read_to_string(&from).unwrap_or_default();
+            if !old.trim().is_empty() {
+                let cur = fs::read_to_string(&to).unwrap_or_default();
+                let merged = format!("{}\n\n<!-- merged from {account} -->\n{}\n", cur.trim_end(), old.trim());
+                fs::write(&to, merged).map_err(|e| e.to_string())?;
+            }
+        } else if !to.exists() {
+            fs::copy(&from, &to).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+/// `base/name`, or `base/name-2`, `-3`… if taken (never clobber an earlier backup).
+fn unique_sibling(base: &Path, name: &str) -> PathBuf {
+    let mut p = base.join(name);
+    let mut i = 2;
+    while p.exists() {
+        p = base.join(format!("{name}-{i}"));
+        i += 1;
+    }
+    p
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shared_memory_merges_and_links() {
+        let base = std::env::temp_dir().join(format!("cmdr-shared-mem-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let cwd = base.join("proj");
+        fs::create_dir_all(&cwd).unwrap();
+        let cwd_s = cwd.to_str().unwrap();
+
+        // account A has private memory already: it must be folded in, backed up, linked
+        let cfg_a = base.join("acct-a");
+        let mem_a = cfg_a.join("projects").join(crate::failover::sanitize_path(cwd_s)).join("memory");
+        fs::create_dir_all(&mem_a).unwrap();
+        fs::write(mem_a.join("MEMORY.md"), "- [Old fact](old-fact.md)").unwrap();
+        fs::write(mem_a.join("old-fact.md"), "the fact").unwrap();
+        ensure_shared_memory(cfg_a.to_str().unwrap(), cwd_s, "Acct A").unwrap();
+
+        let shared = shared_memory_dir(cwd_s);
+        assert!(shared.join("old-fact.md").exists());
+        assert!(fs::read_to_string(shared.join("MEMORY.md")).unwrap().contains("Old fact"));
+        assert!(mem_a.parent().unwrap().join("memory.pre-shared").exists());
+        // the account path now resolves into the shared dir; writes cross over
+        assert_eq!(fs::canonicalize(&mem_a).unwrap(), fs::canonicalize(&shared).unwrap());
+        fs::write(mem_a.join("via-link.md"), "x").unwrap();
+        assert!(shared.join("via-link.md").exists());
+        // idempotent second call
+        ensure_shared_memory(cfg_a.to_str().unwrap(), cwd_s, "Acct A").unwrap();
+
+        // account B's MEMORY.md is appended under a merge marker, not clobbered
+        let cfg_b = base.join("acct-b");
+        let mem_b = cfg_b.join("projects").join(crate::failover::sanitize_path(cwd_s)).join("memory");
+        fs::create_dir_all(&mem_b).unwrap();
+        fs::write(mem_b.join("MEMORY.md"), "- [B fact](b-fact.md)").unwrap();
+        ensure_shared_memory(cfg_b.to_str().unwrap(), cwd_s, "Acct B").unwrap();
+        let idx = fs::read_to_string(shared.join("MEMORY.md")).unwrap();
+        assert!(idx.contains("Old fact") && idx.contains("B fact") && idx.contains("merged from Acct B"));
+
+        let _ = fs::remove_dir_all(&base);
+    }
+}
+
+/// Create a directory link. A junction on Windows: unlike a real symlink it needs no admin
+/// rights or developer mode, and Claude Code follows it transparently.
+#[cfg(windows)]
+fn link_dir(link: &Path, target: &Path) -> Result<(), String> {
+    let mut cmd = std::process::Command::new("cmd");
+    cmd.arg("/c").arg("mklink").arg("/J").arg(link).arg(target);
+    crate::platform::quiet(&mut cmd);
+    let out = cmd.output().map_err(|e| e.to_string())?;
+    if out.status.success() || fs::canonicalize(link).ok() == fs::canonicalize(target).ok() {
+        return Ok(()); // success, or a parallel launch beat us to the same link
+    }
+    Err(format!(
+        "mklink /J failed: {}{}",
+        String::from_utf8_lossy(&out.stdout).trim(),
+        String::from_utf8_lossy(&out.stderr).trim()
+    ))
+}
+
+#[cfg(not(windows))]
+fn link_dir(link: &Path, target: &Path) -> Result<(), String> {
+    match std::os::unix::fs::symlink(target, link) {
+        Ok(()) => Ok(()),
+        // a parallel launch may have created the same link between our check and now
+        Err(_) if fs::canonicalize(link).ok() == fs::canonicalize(target).ok() => Ok(()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 pub fn ensure_memory(cwd: &str) -> std::io::Result<PathBuf> {
     let dir = memory_dir(cwd);
     fs::create_dir_all(&dir)?;

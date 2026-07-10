@@ -86,6 +86,8 @@ pub struct Instance {
     pub worker_pool: Vec<i64>,
     /// When operator, also let it use its own subagents (off by default = delegate only).
     pub use_own_agents: bool,
+    /// Peer identity like "CC2.1" (account slot . instance ordinal); None for shells.
+    pub peer_label: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -201,10 +203,33 @@ pub struct Pool {
     pub name: String,
     pub cwd: String,
     pub goal: String,
-    /// idle | running | done | stopped
+    /// idle | running | done | stopped | stalled
     pub status: String,
     pub created_at: String,
     pub members: Vec<PoolMember>,
+    /// Optional staged workflow (ordered). Empty = free-form pool.
+    pub stages: Vec<PoolStage>,
+}
+
+/// One stage of a pool's ruleset. Commander enforces the pipeline: exactly one stage is
+/// active at a time, its owner is nudged with precise file instructions, and "review"
+/// stages gate progress — REVISE sends the work back to the previous stage's owner.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PoolStage {
+    pub id: i64,
+    pub pool_id: i64,
+    pub seq: i64,
+    pub name: String,
+    /// "work" | "review"
+    pub kind: String,
+    pub member_id: i64,
+    pub member_name: String,
+    pub instructions: String,
+    /// pending | active | done
+    pub status: String,
+    /// revision rounds a work stage has been through
+    pub attempts: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]

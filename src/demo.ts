@@ -182,13 +182,13 @@ const instances: Instance[] = [
     id: 1, accountId: 1, projectId: 1, cwd: "C:\\Dev\\acme-web", status: "running",
     startedAt: iso(now() - 47 * MIN), endedAt: null, exitCode: null, sessionId: "demo-session-1",
     accountName: "Main", projectName: "acme-web", mode: "new", kind: "claude",
-    isOrchestrator: true, workerPool: [2, 3], useOwnAgents: false,
+    isOrchestrator: true, workerPool: [2, 3], useOwnAgents: false, peerLabel: "CC1.1",
   },
   {
     id: 2, accountId: 2, projectId: 1, cwd: "C:\\Dev\\acme-web-worktrees\\feat-dark-mode", status: "running",
     startedAt: iso(now() - 12 * MIN), endedAt: null, exitCode: null, sessionId: "demo-session-2",
     accountName: "Work", projectName: "acme-web", mode: "new", kind: "claude",
-    isOrchestrator: false, workerPool: [], useOwnAgents: false,
+    isOrchestrator: false, workerPool: [], useOwnAgents: false, peerLabel: "CC2.1",
   },
 ];
 
@@ -260,6 +260,7 @@ const settings: Record<string, string> = {
   claude_path: "",
   claude_path_resolved: "C:\\Users\\you\\AppData\\Roaming\\npm\\claude.cmd (demo — not launched)",
   extra_args_default: "",
+  shared_project_memory: "1",
 };
 
 const memoryFiles = new Map<string, string>([
@@ -454,6 +455,13 @@ function makeInstance(args: {
 }): Instance {
   const acct = accounts.find((a) => a.id === args.accountId);
   const proj = args.projectId != null ? projects.find((p) => p.id === args.projectId) : undefined;
+  const isShell = args.kind === "shell";
+  // lowest free per-account ordinal, mirroring the real backend's CC<account>.<n> minting
+  const used = instances
+    .filter((i) => i.accountId === args.accountId && (i.status === "running" || i.status === "limit_hit") && i.peerLabel)
+    .map((i) => Number(i.peerLabel!.split(".")[1] ?? 0));
+  let ordinal = 1;
+  while (used.includes(ordinal)) ordinal++;
   const inst: Instance = {
     id: nextId++,
     accountId: args.accountId,
@@ -471,6 +479,7 @@ function makeInstance(args: {
     isOrchestrator: args.isOrchestrator ?? false,
     workerPool: args.workerPool ?? [],
     useOwnAgents: args.useOwnAgents ?? false,
+    peerLabel: isShell ? null : `CC${args.accountId}.${ordinal}`,
   };
   instances.push(inst);
   pendingPrompt.set(inst.id, args.initialPrompt);
@@ -813,6 +822,7 @@ export function makeDemoIpc(real: IpcApi): IpcApi {
         goal: args.goal,
         status: "idle",
         createdAt: iso(now()),
+        stages: [],
         members: args.members.map((m) => {
           const a = accounts.find((x) => x.id === m.accountId);
           return {
@@ -829,6 +839,18 @@ export function makeDemoIpc(real: IpcApi): IpcApi {
         }),
       };
       p.members.forEach((m) => (m.poolId = p.id));
+      p.stages = (args.stages ?? []).map((s, i) => ({
+        id: nextId++,
+        poolId: p.id,
+        seq: i + 1,
+        name: s.name || `Stage ${i + 1}`,
+        kind: s.kind,
+        memberId: p.members[s.memberIndex]?.id ?? 0,
+        memberName: p.members[s.memberIndex]?.accountName ?? "?",
+        instructions: s.instructions,
+        status: "pending",
+        attempts: 0,
+      }));
       demoPools.unshift(p);
       return p;
     },

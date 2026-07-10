@@ -106,8 +106,13 @@ const real = {
   mcpStatus: () => invoke<McpStatus>("mcp_status"),
 
   // pools (peer agents on a shared board — see pools.rs)
-  createPool: (args: { name: string; cwd: string; goal: string; members: { accountId: number; model: string }[] }) =>
-    invoke<Pool>("create_pool", args),
+  createPool: (args: {
+    name: string;
+    cwd: string;
+    goal: string;
+    members: { accountId: number; model: string }[];
+    stages?: { name: string; kind: string; memberIndex: number; instructions: string }[];
+  }) => invoke<Pool>("create_pool", args),
   listPools: () => invoke<Pool[]>("list_pools"),
   startPool: (poolId: number) => invoke<Pool>("start_pool", { poolId }),
   stopPool: (poolId: number) => invoke<Pool>("stop_pool", { poolId }),

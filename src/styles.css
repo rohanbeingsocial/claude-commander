@@ -1937,3 +1937,34 @@ a.demo-pill-btn {
   max-width: 900px;
   width: min(900px, 92vw);
 }
+
+.pool-stages {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+  font-size: 11px;
+}
+.pool-stage {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px 8px;
+  color: var(--dim);
+  background: var(--card);
+}
+.pool-stage.ps-active {
+  border-color: var(--accent);
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.pool-stage.ps-done {
+  border-color: var(--green);
+}
+.ps-arrow {
+  color: var(--dim);
+  margin-right: 4px;
+}

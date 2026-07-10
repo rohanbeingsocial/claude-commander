@@ -17,6 +17,15 @@ interface DraftMember {
   model: string;
 }
 
+interface DraftStage {
+  name: string;
+  kind: "work" | "review";
+  memberIndex: number;
+  instructions: string;
+}
+
+const STAGE_STATUS_ICON: Record<string, string> = { pending: "○", active: "▶", done: "✓" };
+
 export default function PoolsView() {
   const pools = useStore((s) => s.pools);
   const accounts = useStore((s) => s.accounts);
@@ -30,6 +39,7 @@ export default function PoolsView() {
   const [cwd, setCwd] = useState("");
   const [goal, setGoal] = useState("");
   const [draft, setDraft] = useState<DraftMember[]>([{ accountId: null, model: "" }, { accountId: null, model: "" }]);
+  const [stages, setStages] = useState<DraftStage[]>([]);
   const [busy, setBusy] = useState(false);
   const [boardPool, setBoardPool] = useState<Pool | null>(null);
 
@@ -56,16 +66,28 @@ export default function PoolsView() {
     setDraft((d) => d.map((m, j) => (j === i ? { ...m, ...patch } : m)));
 
   const create = async () => {
-    const members = draft.filter((m) => m.accountId != null) as { accountId: number; model: string }[];
+    // keep member indexes stable for the stage owner mapping: only trailing empty rows
+    // are droppable, so require every row above a picked one to be picked too
+    const members = draft.map((m) => ({ accountId: m.accountId, model: m.model }));
+    while (members.length && members[members.length - 1].accountId == null) members.pop();
     if (!cwd) return toast("error", "Pick a folder for the pool");
     if (!goal.trim()) return toast("error", "Describe the pool's goal");
     if (members.length === 0) return toast("error", "Pick at least one member account");
+    if (members.some((m) => m.accountId == null)) return toast("error", "Every member row needs an account (or remove the empty row)");
+    if (stages.some((s) => s.memberIndex >= members.length)) return toast("error", "A stage points at a removed member — fix its owner");
     setBusy(true);
     try {
-      const p = await ipc.createPool({ name: name.trim() || "Pool", cwd, goal: goal.trim(), members });
+      const p = await ipc.createPool({
+        name: name.trim() || "Pool",
+        cwd,
+        goal: goal.trim(),
+        members: members as { accountId: number; model: string }[],
+        stages: stages.length ? stages : undefined,
+      });
       setName("");
       setGoal("");
       setDraft([{ accountId: null, model: "" }, { accountId: null, model: "" }]);
+      setStages([]);
       await refreshPools();
       toast("success", `Pool “${p.name}” created — press Start to launch the agents`);
     } catch (e) {
@@ -73,6 +95,32 @@ export default function PoolsView() {
     } finally {
       setBusy(false);
     }
+  };
+
+  /** The classic ruleset: A plans → B reviews & cross-questions (revisions loop back to
+   *  A automatically) → C implements. Owners map onto the member rows in order. */
+  const applyTemplate = () => {
+    const idx = (i: number) => Math.min(i, Math.max(draft.length - 1, 0));
+    setStages([
+      {
+        name: "Implementation plan",
+        kind: "work",
+        memberIndex: idx(0),
+        instructions: "Produce a complete implementation plan for the goal: approach, files to touch, steps, risks, and how to verify.",
+      },
+      {
+        name: "Plan review",
+        kind: "review",
+        memberIndex: idx(1),
+        instructions: "Check the plan covers everything the goal requires; question anything vague or risky before approving.",
+      },
+      {
+        name: "Implement the plan",
+        kind: "work",
+        memberIndex: idx(2),
+        instructions: "Implement exactly what the approved plan says; note any necessary deviations in chat.md as you go.",
+      },
+    ]);
   };
 
   const start = async (p: Pool) => {
@@ -191,6 +239,75 @@ export default function PoolsView() {
           <button className="btn btn-sm" onClick={() => setDraft((d) => [...d, { accountId: null, model: "" }])}>
             + Add member
           </button>
+        </div>
+
+        <label className="field-label">
+          Workflow (optional) — ordered stages with review gates, enforced by Commander
+        </label>
+        <div className="dim small">
+          Without stages the agents self-organize. With stages, exactly one agent works at a time: a{" "}
+          <strong>review</strong> stage cross-questions the previous stage's author and can send the work back — the
+          revision loop runs until the reviewer approves, all automatic.
+        </div>
+        {stages.map((s, i) => (
+          <div className="row" key={i} style={{ marginTop: 4 }}>
+            <span className="dim small" style={{ width: 18, textAlign: "right" }}>
+              {i + 1}.
+            </span>
+            <select
+              value={s.kind}
+              onChange={(e) => setStages((st) => st.map((x, j) => (j === i ? { ...x, kind: e.target.value as "work" | "review" } : x)))}
+              style={{ width: 92 }}
+            >
+              <option value="work">work</option>
+              <option value="review">review</option>
+            </select>
+            <input
+              style={{ width: 170 }}
+              placeholder="stage name"
+              value={s.name}
+              onChange={(e) => setStages((st) => st.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))}
+            />
+            <select
+              value={s.memberIndex}
+              onChange={(e) => setStages((st) => st.map((x, j) => (j === i ? { ...x, memberIndex: Number(e.target.value) } : x)))}
+              style={{ width: 160 }}
+              title="Which member owns this stage"
+            >
+              {draft.map((m, mi) => {
+                const a = enabled.find((x) => x.id === m.accountId);
+                return (
+                  <option key={mi} value={mi}>
+                    {a ? `${a.name} (${a.engine})` : `member ${mi + 1}`}
+                  </option>
+                );
+              })}
+            </select>
+            <input
+              style={{ flex: 1 }}
+              placeholder="instructions for this stage (optional)"
+              value={s.instructions}
+              onChange={(e) => setStages((st) => st.map((x, j) => (j === i ? { ...x, instructions: e.target.value } : x)))}
+            />
+            <button className="btn btn-sm btn-ghost" title="Remove stage" onClick={() => setStages((st) => st.filter((_, j) => j !== i))}>
+              ✕
+            </button>
+          </div>
+        ))}
+        <div className="row" style={{ marginTop: 6 }}>
+          <button
+            className="btn btn-sm"
+            onClick={() => setStages((st) => [...st, { name: "", kind: "work", memberIndex: 0, instructions: "" }])}
+          >
+            + Add stage
+          </button>
+          <button
+            className="btn btn-sm"
+            onClick={applyTemplate}
+            title="A drafts the plan → B reviews & cross-questions it (revisions loop back to A) → C implements"
+          >
+            Template: Plan → Review → Implement
+          </button>
           <button className="btn btn-primary btn-sm" onClick={create} disabled={busy}>
             Create pool
           </button>
@@ -234,7 +351,14 @@ function PoolCard({
     <div className="card settings-card">
       <div className="row wrap" style={{ justifyContent: "space-between" }}>
         <span>
-          <strong>{pool.name}</strong> <span className={`pill pill-mini st-${running ? "running" : pool.status === "done" ? "available" : "exited"}`}>{pool.status}</span>
+          <strong>{pool.name}</strong>{" "}
+          <span
+            className={`pill pill-mini st-${
+              running ? "running" : pool.status === "done" ? "available" : pool.status === "stalled" ? "limit_hit" : "exited"
+            }`}
+          >
+            {pool.status}
+          </span>
         </span>
         <span className="row">
           {!running && (
@@ -265,6 +389,17 @@ function PoolCard({
       <div className="dim small ellipsis" title={pool.goal}>
         {pool.goal}
       </div>
+      {pool.stages.length > 0 && (
+        <div className="pool-stages">
+          {pool.stages.map((s, i) => (
+            <span key={s.id} className={`pool-stage ps-${s.status}`} title={`${s.kind} · ${s.memberName}${s.instructions ? ` — ${s.instructions}` : ""}`}>
+              {i > 0 && <span className="ps-arrow">→</span>}
+              {STAGE_STATUS_ICON[s.status] ?? "○"} {s.kind === "review" ? "🔍" : "✎"} {s.name}
+              <span className="dim"> ({s.memberName}{s.attempts > 0 ? ` · r${s.attempts}` : ""})</span>
+            </span>
+          ))}
+        </div>
+      )}
       <div className="pool-members">
         {pool.members.map((m) => {
           const st = MEMBER_STATUS[m.status] ?? MEMBER_STATUS.idle;

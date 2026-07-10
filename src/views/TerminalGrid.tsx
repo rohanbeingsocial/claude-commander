@@ -240,6 +240,11 @@ function TileToolbar({
       <div className="cell-id ellipsis">
         <span className={`status-dot st-${status}`} />
         <strong>{inst.accountName}</strong>
+        {inst.peerLabel && (
+          <span className="dim small" title="Peer id — how other Commander instances in this folder address it">
+            {inst.peerLabel}
+          </span>
+        )}
         {KIND_CHIP[inst.kind] && (
           <span className="cell-shell" title={KIND_CHIP[inst.kind].title}>
             {KIND_CHIP[inst.kind].label}

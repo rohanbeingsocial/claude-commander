@@ -64,9 +64,10 @@ fn build_command(
     for a in extra_args.split_whitespace() {
         cmd.arg(a);
     }
-    // Orchestrator wiring: point Claude at Commander's MCP server, forbid its own Task
-    // subagents (unless opted out), and nudge it to delegate. Passed as dedicated args so a
-    // config path with spaces survives (unlike the whitespace-split extra_args).
+    // MCP wiring: point Claude at Commander's server — every instance gets the peer-identity
+    // tools; an orchestrator additionally has Task forbidden (unless opted out) and a
+    // delegation prompt. Passed as dedicated args so a config path with spaces survives
+    // (unlike the whitespace-split extra_args).
     if let Some(o) = orch {
         cmd.arg("--mcp-config");
         cmd.arg(&o.mcp_config_path);
@@ -375,6 +376,76 @@ pub fn spawn_claude(
         crate::statusline::ensure_tap_for(app, &config_dir);
     }
 
+    // Peer identity CC<a>.<n>: a = the account's slot number (from its config dir, so it
+    // lines up with the cc/ccw scripts), n = lowest ordinal not held by a live instance of
+    // this account. Minted for every non-shell launch so instances sharing a folder can
+    // recognise and address each other.
+    let (peer_num, peer_label): (Option<i64>, Option<String>) = if is_shell {
+        (None, None)
+    } else {
+        let conn = state.db.lock().unwrap();
+        let n = crate::mcp::next_peer_num(&conn, account_id);
+        let a = crate::mcp::account_number(&config_dir, account_id);
+        (Some(n), Some(format!("CC{a}.{n}")))
+    };
+
+    // Shared project memory: every Claude account working in this folder loads and writes
+    // the same .project-memory/memory dir — this account's own memory path becomes a link
+    // to it (first launch merges any private memory in). Failure is non-fatal: the launch
+    // continues on the account's private memory.
+    let shared_memory = is_claude
+        && {
+            let conn = state.db.lock().unwrap();
+            db::get_setting(&conn, "shared_project_memory").as_deref() == Some("1")
+        }
+        && match crate::handover::ensure_shared_memory(&config_dir, cwd, &account_name) {
+            Ok(()) => true,
+            Err(e) => {
+                eprintln!("[commander] shared project memory not linked for {account_name}: {e}");
+                false
+            }
+        };
+
+    // Every Claude launch points at Commander's MCP server: an orchestrator keeps its
+    // delegation prompt (identity line prepended), everything else connects as a plain peer
+    // with the whoami/peers/message_peer tools. If the server isn't up, launch anyway —
+    // the instance just has no peer tools.
+    let mut peer_token: Option<String> = None;
+    let mut mcp_launch: Option<crate::mcp::OrchestratorLaunch> = if !is_claude {
+        None
+    } else if let Some(o) = orch {
+        Some(crate::mcp::OrchestratorLaunch {
+            mcp_config_path: o.mcp_config_path.clone(),
+            disallow_task: o.disallow_task,
+            system_prompt: match peer_label.as_deref() {
+                Some(l) => format!("{} {}", crate::mcp::identity_preamble(l), o.system_prompt),
+                None => o.system_prompt.clone(),
+            },
+        })
+    } else {
+        match crate::mcp::prepare_peer(app, peer_label.as_deref().unwrap_or("?")) {
+            Ok((t, launch)) => {
+                peer_token = Some(t);
+                Some(launch)
+            }
+            Err(e) => {
+                eprintln!("[commander] launching without peer MCP: {e}");
+                None
+            }
+        }
+    };
+    // when the folder's memory is shared, tell the instance to sign what it writes there
+    if shared_memory {
+        if let Some(l) = mcp_launch.as_mut() {
+            l.system_prompt.push_str(&format!(
+                " This folder's Claude memory (MEMORY.md and its entries) is shared by every \
+                Commander account working here - when you add or update a memory entry, sign it \
+                with your id ({}) so it is clear which account learned what.",
+                peer_label.as_deref().unwrap_or("your peer id")
+            ));
+        }
+    }
+
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize { rows: 30, cols: 110, pixel_width: 0, pixel_height: 0 })
@@ -382,7 +453,7 @@ pub fn spawn_claude(
     let cmd = if is_shell {
         build_shell_command(cwd, &config_dir)
     } else if is_claude {
-        build_command(&claude, cwd, &config_dir, mode, extra_args, initial_prompt, orch)
+        build_command(&claude, cwd, &config_dir, mode, extra_args, initial_prompt, mcp_launch.as_ref())
     } else {
         // alternative engine (gemini / codex)
         let program = {
@@ -404,13 +475,17 @@ pub fn spawn_claude(
     let instance_id: i64 = {
         let conn = state.db.lock().unwrap();
         conn.execute(
-            "INSERT INTO instances(account_id, project_id, cwd, mode, status, started_at, kind) VALUES(?1,?2,?3,?4,'running',?5,?6)",
-            params![account_id, project_id, cwd, mode, started_at, kind],
+            "INSERT INTO instances(account_id, project_id, cwd, mode, status, started_at, kind, peer_num, peer_label) VALUES(?1,?2,?3,?4,'running',?5,?6,?7,?8)",
+            params![account_id, project_id, cwd, mode, started_at, kind, peer_num, peer_label],
         )
         .map_err(|e| e.to_string())?;
         conn.last_insert_rowid()
     };
     state.ptys.lock().unwrap().insert(instance_id, PtyHandle { master: pair.master, writer, killer });
+    // now that the row (and thus id) exists, bind the peer token to this instance
+    if let Some(t) = &peer_token {
+        crate::mcp::register(app, t, instance_id);
+    }
 
     // reader thread: stream output to the UI, watch for limit messages
     {
@@ -486,6 +561,8 @@ pub fn spawn_claude(
                 .unwrap_or(0);
             crate::handover::append_log(&cwd_s, &format!("{acct_name} session ended · {mins} min · exit {code}"));
             state.ptys.lock().unwrap().remove(&instance_id);
+            // drop the MCP token too, so a natural CLI exit frees it like kill/close do
+            crate::mcp::unregister_instance(&app, instance_id);
             let _ = app.emit("pty-exit", PtyExit { instance_id, exit_code: code });
             let snap = {
                 let conn = state.db.lock().unwrap();
@@ -514,6 +591,7 @@ pub fn spawn_claude(
         is_orchestrator: false,
         worker_pool: Vec::new(),
         use_own_agents: false,
+        peer_label,
     })
 }
 
@@ -623,7 +701,7 @@ pub fn list_instances(state: State<'_, AppState>) -> Result<Vec<Instance>, Strin
     let conn = state.db.lock().unwrap();
     let mut stmt = conn
         .prepare(
-            "SELECT i.id, i.account_id, i.project_id, i.cwd, i.mode, i.session_id, i.status, i.exit_code, i.started_at, i.ended_at, a.name, p.name, i.is_orchestrator, i.worker_pool, i.use_own_agents, i.kind
+            "SELECT i.id, i.account_id, i.project_id, i.cwd, i.mode, i.session_id, i.status, i.exit_code, i.started_at, i.ended_at, a.name, p.name, i.is_orchestrator, i.worker_pool, i.use_own_agents, i.kind, i.peer_label
              FROM instances i
              JOIN accounts a ON a.id=i.account_id
              LEFT JOIN projects p ON p.id=i.project_id
@@ -654,6 +732,7 @@ pub fn list_instances(state: State<'_, AppState>) -> Result<Vec<Instance>, Strin
                     .unwrap_or_default(),
                 use_own_agents: r.get::<_, i64>(14)? != 0,
                 kind: r.get(15)?,
+                peer_label: r.get(16)?,
             })
         })
         .map_err(|e| e.to_string())?;
