@@ -131,6 +131,35 @@ pub struct WorkerTask {
     pub ended_at: Option<String>,
 }
 
+/// An autopilot assignment: one task the managed pipeline drives end-to-end — pick the
+/// best account, run a planning worker, then an implementation worker, auto-reassigning
+/// whenever an account hits its limit. See pipeline.rs / docs/ORCHESTRATION.md §11.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Assignment {
+    pub id: i64,
+    pub orchestrator_instance_id: Option<i64>,
+    pub title: String,
+    pub prompt: String,
+    pub cwd: String,
+    pub model: String,
+    /// plan | implement
+    pub phase: String,
+    /// running | waiting | done | failed | stopped
+    pub status: String,
+    pub folder: String,
+    pub current_worker_id: Option<i64>,
+    pub hops: i64,
+    pub last_error: Option<String>,
+    pub retry_after: Option<String>,
+    pub created_at: String,
+    pub ended_at: Option<String>,
+    // joined from the current worker, for display
+    pub current_account: Option<String>,
+    pub current_worker_status: Option<String>,
+    pub frees_at: Option<String>,
+}
+
 /// Everything the orchestrator needs to know when a worker stops — always produced, so a
 /// worker never dies silently. `progress` is the worker's own `progress.md`, or a summary
 /// distilled from its output stream when the checkpoint is missing/stale.

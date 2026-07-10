@@ -9,6 +9,7 @@ mod mcp;
 mod misc;
 mod models;
 mod orchestration;
+mod pipeline;
 mod platform;
 mod projects;
 mod pty;
@@ -83,6 +84,8 @@ fn main() {
                     };
                     // auto-wake limit-stuck instances whose window has reset (opt-in setting)
                     failover::auto_wake_tick(&handle);
+                    // autopilot heartbeat: restart waiting assignments, recover crashed ones
+                    pipeline::tick(&handle);
                     std::thread::sleep(Duration::from_secs(interval));
                 }
             });
@@ -122,6 +125,10 @@ fn main() {
             orchestration::stop_worker,
             orchestration::reassign_worker,
             orchestration::set_operator,
+            pipeline::create_assignment,
+            pipeline::list_assignments,
+            pipeline::stop_assignment,
+            pipeline::assignment_plan,
             mcp::mcp_status,
             tasks::list_tasks,
             tasks::add_task,

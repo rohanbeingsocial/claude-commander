@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { isDemoMode, makeDemoIpc } from "./demo";
 import type {
   AccountUsage,
+  Assignment,
   ClosureReport,
   FsEntry,
   HandoverRow,
@@ -98,6 +99,13 @@ const real = {
   setOperator: (args: { instanceId: number; isOperator: boolean; workerPool: number[]; useOwnAgents: boolean }) =>
     invoke<void>("set_operator", args),
   mcpStatus: () => invoke<McpStatus>("mcp_status"),
+
+  // autopilot assignments (managed plan→implement pipeline) — see docs/ORCHESTRATION.md §11
+  createAssignment: (args: { cwd: string; prompt: string; title?: string; orchestratorInstanceId?: number | null }) =>
+    invoke<Assignment>("create_assignment", args),
+  listAssignments: () => invoke<Assignment[]>("list_assignments"),
+  stopAssignment: (assignmentId: number) => invoke<void>("stop_assignment", { assignmentId }),
+  assignmentPlan: (assignmentId: number) => invoke<string>("assignment_plan", { assignmentId }),
 
   // tasks
   listTasks: () => invoke<Task[]>("list_tasks"),

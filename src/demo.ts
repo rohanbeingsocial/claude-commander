@@ -6,6 +6,7 @@
 // ipc.ts swaps the real invoke-backed API for makeDemoIpc() at startup.
 import type {
   AccountUsage,
+  Assignment,
   ClosureReport,
   FailoverDoneEv,
   FsEntry,
@@ -475,6 +476,33 @@ function makeInstance(args: {
   return inst;
 }
 
+const assignments: Assignment[] = [
+  {
+    id: 1, orchestratorInstanceId: 1, title: "Add rate-limit headers to the public API",
+    prompt: "Add standard X-RateLimit-* headers to every public API response.", cwd: "C:\\Dev\\billing-api",
+    model: "claude-fable-5", phase: "implement", status: "running",
+    folder: "C:\\Dev\\billing-api\\.commander-tasks\\a1-rate-limit-headers",
+    currentWorkerId: 1, hops: 1, lastError: null, retryAfter: null,
+    createdAt: iso(now() - 30 * MIN), endedAt: null,
+    currentAccount: "Work", currentWorkerStatus: "running", freesAt: null,
+  },
+];
+
+/** Autopilot assignments advance on their own: plan → implement → done. */
+function settleAssignments(): void {
+  for (const a of assignments) {
+    if (a.status !== "running") continue;
+    const age = now() - new Date(a.createdAt).getTime();
+    if (a.phase === "plan" && age > 25_000) {
+      a.phase = "implement";
+    } else if (a.phase === "implement" && age > 70_000) {
+      a.status = "done";
+      a.endedAt = iso(now());
+      a.currentWorkerStatus = "done";
+    }
+  }
+}
+
 /** Workers "finish" on their own a little while after being delegated. */
 function settleWorkers(): void {
   for (const w of workers) {
@@ -801,6 +829,45 @@ export function makeDemoIpc(real: IpcApi): IpcApi {
         orchestrators: instances.filter((i) => i.status === "running" && i.isOrchestrator).length,
       };
       return s;
+    },
+
+    // autopilot assignments
+    createAssignment: async (args) => {
+      const acct = accounts.find((x) => accountStatus(x, runningOn(x.id)) === "available") ?? accounts[0];
+      const title = args.title?.trim() || args.prompt.split("\n")[0].slice(0, 80);
+      const a: Assignment = {
+        id: nextId++,
+        orchestratorInstanceId: args.orchestratorInstanceId ?? null,
+        title,
+        prompt: args.prompt,
+        cwd: args.cwd,
+        model: "claude-fable-5",
+        phase: "plan",
+        status: "running",
+        folder: `${args.cwd}\\.commander-tasks\\a${nextId}-${slug(title)}`,
+        currentWorkerId: null, hops: 0, lastError: null, retryAfter: null,
+        createdAt: iso(now()), endedAt: null,
+        currentAccount: acct?.name ?? null, currentWorkerStatus: "running", freesAt: null,
+      };
+      assignments.unshift(a);
+      return a;
+    },
+    listAssignments: async () => {
+      settleAssignments();
+      return [...assignments];
+    },
+    stopAssignment: async (assignmentId) => {
+      const a = assignments.find((x) => x.id === assignmentId);
+      if (a && (a.status === "running" || a.status === "waiting")) {
+        a.status = "stopped";
+        a.endedAt = iso(now());
+      }
+    },
+    assignmentPlan: async (assignmentId) => {
+      const a = assignments.find((x) => x.id === assignmentId);
+      if (!a) throw new Error("demo: no such assignment");
+      if (a.phase === "plan" && a.status === "running") return "";
+      return `# Implementation plan — ${a.title}\n\n_(demo plan — nothing was read from disk)_\n\n1. Survey the affected modules and list touch points.\n2. Implement the change behind the existing patterns.\n3. Add tests mirroring the neighboring suites.\n4. Verify: run the test suite and exercise the flow end-to-end.\n`;
     },
 
     // tasks

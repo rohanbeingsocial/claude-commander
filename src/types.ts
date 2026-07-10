@@ -117,6 +117,28 @@ export interface WorkerTask {
   endedAt: string | null;
 }
 
+/** An autopilot assignment: the managed plan→implement pipeline. See docs/ORCHESTRATION.md §11. */
+export interface Assignment {
+  id: number;
+  orchestratorInstanceId: number | null;
+  title: string;
+  prompt: string;
+  cwd: string;
+  model: string;
+  phase: string; // plan | implement
+  status: string; // running | waiting | done | failed | stopped
+  folder: string;
+  currentWorkerId: number | null;
+  hops: number;
+  lastError: string | null;
+  retryAfter: string | null;
+  createdAt: string;
+  endedAt: string | null;
+  currentAccount: string | null;
+  currentWorkerStatus: string | null;
+  freesAt: string | null;
+}
+
 export interface ClosureReport {
   worker: WorkerTask;
   progress: string;

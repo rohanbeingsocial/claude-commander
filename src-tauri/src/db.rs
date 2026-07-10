@@ -119,6 +119,23 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             ended_at TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_worker_orch ON worker_tasks(orchestrator_instance_id, id);
+        CREATE TABLE IF NOT EXISTS assignments(
+            id INTEGER PRIMARY KEY,
+            orchestrator_instance_id INTEGER REFERENCES instances(id) ON DELETE SET NULL,
+            title TEXT NOT NULL,
+            prompt TEXT NOT NULL,
+            cwd TEXT NOT NULL,
+            model TEXT NOT NULL,
+            phase TEXT NOT NULL DEFAULT 'plan',
+            status TEXT NOT NULL DEFAULT 'running',
+            folder TEXT NOT NULL DEFAULT '',
+            current_worker_id INTEGER REFERENCES worker_tasks(id) ON DELETE SET NULL,
+            hops INTEGER NOT NULL DEFAULT 0,
+            last_error TEXT,
+            retry_after TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+            ended_at TEXT
+        );
         "#,
     )?;
     // additive columns for existing databases (ignore "duplicate column" errors)
@@ -131,6 +148,8 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     add_column(conn, "instances", "use_own_agents", "INTEGER NOT NULL DEFAULT 0");
     // 'claude' (default) or 'shell' — a plain PowerShell terminal with the account's env
     add_column(conn, "instances", "kind", "TEXT NOT NULL DEFAULT 'claude'");
+    // link a worker to the autopilot assignment that spawned it (see pipeline.rs)
+    add_column(conn, "worker_tasks", "assignment_id", "INTEGER");
     Ok(())
 }
 

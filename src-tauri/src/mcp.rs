@@ -21,14 +21,15 @@ use tauri::{AppHandle, Manager};
 
 /// One-line, shell-safe (no metacharacters) system prompt appended to an orchestrator so it
 /// actually reaches for the delegation tools instead of doing the heavy work itself.
-const SYSTEM_PROMPT: &str = "You are an orchestrator in Claude Commander. Delegate substantial \
-    subtasks to worker accounts using the commander MCP tools - delegate, poll, collect, \
-    workers_list, workers_usage, broadcast_context, adopt_workers - rather than doing the heavy \
-    work yourself. Plan the work, dispatch it across the worker pool, and read the distilled \
-    worker reports to stay cheap. When a worker pauses at a usage limit, decide whether to wait \
-    for its reset or reassign the remainder. If you were relaunched after a previous operator \
-    session died or hit its limit, call adopt_workers first to take over its workers and their \
-    progress.";
+const SYSTEM_PROMPT: &str = "You are an orchestrator in Claude Commander. For a whole task, prefer \
+    the autopilot: call assign_task once and Commander runs the full pipeline unattended - it picks \
+    the best-headroom account, produces an implementation plan, then implements it, auto-reassigning \
+    to another account whenever one hits a usage limit. Track it with assignments_status and stop it \
+    with stop_assignment. For smaller one-shot subtasks you want to fan out and control yourself, use \
+    the manual tools - delegate, poll, collect, workers_list, workers_usage, broadcast_context, \
+    adopt_workers - rather than doing the heavy work yourself. Read the distilled reports to stay \
+    cheap. If you were relaunched after a previous operator session died or hit its limit, call \
+    adopt_workers first to take over its workers and their progress.";
 
 /// What pty.rs needs to launch an instance as an orchestrator.
 pub struct OrchestratorLaunch {
@@ -245,6 +246,38 @@ fn tool_defs() -> Value {
             }
         },
         {
+            "name": "assign_task",
+            "description": "Hand a whole task to the autopilot pipeline. Commander picks the pool account with the most real headroom, runs a PLANNING worker (implementation plan only -> plan.md), then an IMPLEMENTATION worker that follows the plan, and automatically reassigns the remainder to another account whenever one hits a usage limit. Workers run on the enforced assignment model (Fable by default). Fire-and-forget: track it with assignments_status.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "task": { "type": "string", "description": "The task to plan and implement." },
+                    "title": { "type": "string", "description": "Optional short label; defaults to the task's first line." },
+                    "cwd": { "type": "string", "description": "Working directory; defaults to the orchestrator's own cwd." }
+                },
+                "required": ["task"]
+            }
+        },
+        {
+            "name": "assignments_status",
+            "description": "Progress of autopilot assignments: phase (plan/implement), status (running/waiting/done/failed/stopped), which account is on it, reassignment hops, a progress excerpt, and whether the plan is ready. Pass assignment_id for full detail including the plan.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "assignment_id": { "type": "integer", "description": "One assignment in detail; omit to list all." }
+                }
+            }
+        },
+        {
+            "name": "stop_assignment",
+            "description": "Stop an autopilot assignment and kill its running worker. Progress and diff stay on disk.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "assignment_id": { "type": "integer" } },
+                "required": ["assignment_id"]
+            }
+        },
+        {
             "name": "poll",
             "description": "Cheap status of workers: status (running/done/paused_at_limit/failed/stopped), a short progress excerpt, whether a result exists, and reset time if paused. Omit worker_ids for all of this orchestrator's workers.",
             "inputSchema": {
@@ -289,6 +322,14 @@ fn call_tool(app: &AppHandle, orch_id: i64, params: &Value) -> Value {
     let out: Result<Value, String> = match name {
         "workers_list" => orchestration::mcp_pool_status(app, orch_id),
         "workers_usage" => tool_workers_usage(app, orch_id, &args),
+        "assign_task" => tool_assign_task(app, orch_id, &args),
+        "assignments_status" => {
+            crate::pipeline::status_for_orchestrator(app, orch_id, args.get("assignment_id").and_then(|v| v.as_i64()))
+        }
+        "stop_assignment" => match args.get("assignment_id").and_then(|v| v.as_i64()) {
+            Some(id) => crate::pipeline::stop_from_orchestrator(app, orch_id, id),
+            None => Err("`assignment_id` is required".into()),
+        },
         "delegate" => tool_delegate(app, orch_id, &args),
         "poll" => tool_poll(app, orch_id, &args),
         "collect" => tool_collect(app, orch_id, &args),
@@ -310,6 +351,27 @@ fn tool_workers_usage(app: &AppHandle, orch_id: i64, args: &Value) -> Result<Val
     let aid = orchestration::resolve_pool_account(app, orch_id, account_id, account_name)?;
     let usage = orchestration::account_usage(app, aid)?;
     serde_json::to_value(usage).map_err(|e| e.to_string())
+}
+
+fn tool_assign_task(app: &AppHandle, orch_id: i64, args: &Value) -> Result<Value, String> {
+    let task = args
+        .get("task")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .filter(|s| !s.trim().is_empty())
+        .ok_or("`task` is required")?;
+    let title = args.get("title").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let cwd = args.get("cwd").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let a = crate::pipeline::assign_from_orchestrator(app, orch_id, cwd, task, title)?;
+    Ok(json!({
+        "assignment_id": a.id,
+        "title": a.title,
+        "phase": a.phase,
+        "status": a.status,
+        "model": a.model,
+        "account": a.current_account,
+        "note": "Autopilot engaged: planning first, then implementation; limits auto-reassign. Track with assignments_status."
+    }))
 }
 
 fn tool_delegate(app: &AppHandle, orch_id: i64, args: &Value) -> Result<Value, String> {

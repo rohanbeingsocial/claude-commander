@@ -262,6 +262,8 @@ pub fn boot(conn: &Connection) {
         ("auto_reassign", "0"),
         ("auto_wake", "0"),
         ("worker_extra_args_default", "--dangerously-skip-permissions"),
+        // every autopilot worker runs on this model (see pipeline.rs)
+        ("assignment_model", crate::pipeline::DEFAULT_MODEL),
     ] {
         let _ = conn.execute("INSERT OR IGNORE INTO settings(key,value) VALUES(?1,?2)", params![k, v]);
     }
