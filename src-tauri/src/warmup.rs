@@ -115,7 +115,7 @@ pub fn auto_tick(app: &AppHandle, first_tick: bool) {
     {
         let conn = state.db.lock().unwrap();
         let rows: Vec<(i64, String)> = conn
-            .prepare("SELECT id, config_dir FROM accounts WHERE enabled=1")
+            .prepare("SELECT id, config_dir FROM accounts WHERE enabled=1 AND engine='claude'")
             .and_then(|mut s| s.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).map(|rows| rows.flatten().collect()))
             .unwrap_or_default();
         let now = chrono::Utc::now().timestamp();
@@ -160,7 +160,7 @@ pub fn warm_many(app: AppHandle, account_ids: Vec<i64>) -> Result<usize, String>
         let now = chrono::Utc::now().timestamp();
         for id in account_ids {
             let Ok((name, cfg)) = conn.query_row(
-                "SELECT name, config_dir FROM accounts WHERE id=?1 AND enabled=1",
+                "SELECT name, config_dir FROM accounts WHERE id=?1 AND enabled=1 AND engine='claude'",
                 [id],
                 |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
             ) else {

@@ -1890,3 +1890,50 @@ a.demo-pill-btn {
 .act-status .activity-detail {
   color: var(--dim);
 }
+
+/* ---- pools ---- */
+
+.pool-members {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+.pool-member {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 9px;
+  color: var(--text);
+  background: var(--card);
+}
+.pool-member.pm-running {
+  border-color: var(--green);
+}
+.pool-member.pm-limit_stuck {
+  border-color: var(--yellow);
+  color: var(--yellow);
+}
+.pool-member.pm-exited {
+  border-color: var(--red);
+  opacity: 0.75;
+}
+.pm-nudge {
+  border: none;
+  background: none;
+  color: var(--dim);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 0 0 2px;
+}
+.pm-nudge:hover {
+  color: var(--accent);
+}
+
+.modal-wide {
+  max-width: 900px;
+  width: min(900px, 92vw);
+}

@@ -50,6 +50,10 @@ pub fn recommend(conn: &Connection, exclude: Option<i64>) -> Result<Vec<Recommen
         if Some(a.account.id) == exclude || !a.account.enabled {
             continue;
         }
+        // failover / auto-pick moves Claude sessions — other engines can't receive them
+        if a.account.engine != "claude" {
+            continue;
+        }
         let rem5 = (100.0 - a.five_hour.pct).clamp(0.0, 100.0);
         let rem_w = (100.0 - a.weekly.pct).clamp(0.0, 100.0);
         let usable = matches!(a.status.as_str(), "available" | "busy" | "near_limit");

@@ -119,6 +119,24 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             ended_at TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_worker_orch ON worker_tasks(orchestrator_instance_id, id);
+        CREATE TABLE IF NOT EXISTS pools(
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL,
+            cwd TEXT NOT NULL,
+            goal TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'idle',
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+        );
+        CREATE TABLE IF NOT EXISTS pool_members(
+            id INTEGER PRIMARY KEY,
+            pool_id INTEGER NOT NULL REFERENCES pools(id) ON DELETE CASCADE,
+            account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+            model TEXT NOT NULL DEFAULT '',
+            instance_id INTEGER REFERENCES instances(id) ON DELETE SET NULL,
+            status TEXT NOT NULL DEFAULT 'idle',
+            stuck_since TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_pool_members ON pool_members(pool_id, id);
         "#,
     )?;
     // additive columns for existing databases (ignore "duplicate column" errors)
@@ -131,6 +149,10 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     add_column(conn, "instances", "use_own_agents", "INTEGER NOT NULL DEFAULT 0");
     // 'claude' (default) or 'shell' — a plain PowerShell terminal with the account's env
     add_column(conn, "instances", "kind", "TEXT NOT NULL DEFAULT 'claude'");
+    // which CLI an account signs into: 'claude' (default) | 'gemini' | 'codex'
+    add_column(conn, "accounts", "engine", "TEXT NOT NULL DEFAULT 'claude'");
+    // which CLI a delegated worker runs (copied from its account at delegate time)
+    add_column(conn, "worker_tasks", "engine", "TEXT NOT NULL DEFAULT 'claude'");
     Ok(())
 }
 

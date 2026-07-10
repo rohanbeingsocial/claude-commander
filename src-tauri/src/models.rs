@@ -13,6 +13,9 @@ pub struct Account {
     pub calibrated: bool,
     pub enabled: bool,
     pub limit_hit_until: Option<String>,
+    /// Which CLI this account signs into: "claude" (default) | "gemini" | "codex".
+    /// Usage meters, failover, warm-up and the status-line tap are claude-only.
+    pub engine: String,
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -115,6 +118,8 @@ pub struct WorkerTask {
     pub orchestrator_instance_id: Option<i64>,
     pub account_id: i64,
     pub account_name: String,
+    /// Which CLI runs this worker: "claude" | "gemini" | "codex" (the account's engine).
+    pub engine: String,
     pub model: Option<String>,
     pub prompt: String,
     pub cwd: String,
@@ -182,6 +187,39 @@ pub struct HandoverRow {
     pub reason: String,
     pub file_path: String,
     pub created_at: String,
+}
+
+/// A pool: several AI agents (any mix of Claude / Gemini / Codex accounts, each with its
+/// own model) launched together in one folder to pursue one goal as peers. They coordinate
+/// through a shared board (`.commander-pool/<id>/chat.md`, `plan.md`); Commander is the
+/// message pump (nudges members when the board changes) and the medic (relaunches
+/// limit-stuck members when their window resets). See pools.rs.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Pool {
+    pub id: i64,
+    pub name: String,
+    pub cwd: String,
+    pub goal: String,
+    /// idle | running | done | stopped
+    pub status: String,
+    pub created_at: String,
+    pub members: Vec<PoolMember>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PoolMember {
+    pub id: i64,
+    pub pool_id: i64,
+    pub account_id: i64,
+    pub account_name: String,
+    pub engine: String,
+    pub model: String,
+    pub instance_id: Option<i64>,
+    /// idle | running | limit_stuck | exited
+    pub status: String,
+    pub stuck_since: Option<String>,
 }
 
 /// One live-activity item parsed from a headless worker's stream-json output — what the

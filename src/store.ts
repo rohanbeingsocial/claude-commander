@@ -5,6 +5,7 @@ import type {
   HandoverRow,
   Instance,
   LimitHitEv,
+  Pool,
   Project,
   SidebarMode,
   Task,
@@ -73,6 +74,8 @@ interface AppStore {
   workerActivity: Record<number, WorkerActivity[]>;
   appendWorkerActivity: (a: WorkerActivity) => void;
   refreshWorkerActivity: () => Promise<void>;
+  pools: Pool[];
+  refreshPools: () => Promise<void>;
   settings: Record<string, string>;
 
   activeInstanceId: number | null;
@@ -164,6 +167,14 @@ export const useStore = create<AppStore>((set, get) => ({
       /* non-critical */
     }
   },
+  pools: [],
+  refreshPools: async () => {
+    try {
+      set({ pools: await ipc.listPools() });
+    } catch {
+      /* non-critical */
+    }
+  },
   settings: {},
 
   activeInstanceId: null,
@@ -246,6 +257,7 @@ export const useStore = create<AppStore>((set, get) => ({
       get().refreshTasks(),
       get().refreshHandovers(),
       get().refreshWorkers(),
+      get().refreshPools(),
       get().refreshSettings(),
     ]);
   },

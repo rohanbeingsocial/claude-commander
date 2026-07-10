@@ -7,6 +7,8 @@ import type {
   HandoverRow,
   Instance,
   McpStatus,
+  Pool,
+  PoolBoard,
   Project,
   Recommendation,
   Task,
@@ -33,6 +35,8 @@ const real = {
   addAccount: (path: string, name: string) => invoke<void>("add_account", { path, name }),
   createAccount: (name?: string) =>
     invoke<{ id: number; name: string; configDir: string }>("create_account", { name }),
+  addEngineAccount: (engine: string, name?: string) =>
+    invoke<{ id: number; name: string; configDir: string }>("add_engine_account", { engine, name }),
   removeAccount: (accountId: number) => invoke<void>("remove_account", { accountId }),
   rescanUsage: () => invoke<AccountUsage[]>("rescan_usage"),
 
@@ -100,6 +104,16 @@ const real = {
     invoke<void>("set_operator", args),
   workerActivityLog: () => invoke<WorkerActivity[]>("worker_activity_log"),
   mcpStatus: () => invoke<McpStatus>("mcp_status"),
+
+  // pools (peer agents on a shared board — see pools.rs)
+  createPool: (args: { name: string; cwd: string; goal: string; members: { accountId: number; model: string }[] }) =>
+    invoke<Pool>("create_pool", args),
+  listPools: () => invoke<Pool[]>("list_pools"),
+  startPool: (poolId: number) => invoke<Pool>("start_pool", { poolId }),
+  stopPool: (poolId: number) => invoke<Pool>("stop_pool", { poolId }),
+  deletePool: (poolId: number) => invoke<void>("delete_pool", { poolId }),
+  poolBoard: (poolId: number) => invoke<PoolBoard>("pool_board", { poolId }),
+  nudgePoolMember: (memberId: number, text?: string) => invoke<void>("nudge_pool_member", { memberId, text }),
 
   // tasks
   listTasks: () => invoke<Task[]>("list_tasks"),

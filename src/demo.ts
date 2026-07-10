@@ -12,6 +12,7 @@ import type {
   HandoverRow,
   Instance,
   McpStatus,
+  Pool,
   Project,
   PtyOutEv,
   Recommendation,
@@ -216,14 +217,14 @@ const tasks: Task[] = [
 
 const workers: WorkerTask[] = [
   {
-    id: 1, orchestratorInstanceId: 1, accountId: 2, accountName: "Work", model: "sonnet",
+    id: 1, orchestratorInstanceId: 1, accountId: 2, accountName: "Work", engine: "claude", model: "sonnet",
     prompt: "Write integration tests for the billing webhooks", cwd: "C:\\Dev\\billing-api",
     folder: "C:\\Dev\\billing-api\\.commander-tasks\\w1-billing-webhook-tests",
     status: "running", sessionId: "demo-worker-1", limitKind: null, freesAt: null, exitCode: null,
     resultSummary: null, reassignedTo: null, createdAt: iso(now() - 40_000), endedAt: null,
   },
   {
-    id: 2, orchestratorInstanceId: 1, accountId: 3, accountName: "Spare", model: "haiku",
+    id: 2, orchestratorInstanceId: 1, accountId: 3, accountName: "Spare", engine: "claude", model: "haiku",
     prompt: "Convert the icon set to a sprite sheet", cwd: "C:\\Dev\\acme-web",
     folder: "C:\\Dev\\acme-web\\.commander-tasks\\w2-icon-sprite-sheet",
     status: "done", sessionId: "demo-worker-2", limitKind: null, freesAt: null, exitCode: 0,
@@ -231,7 +232,7 @@ const workers: WorkerTask[] = [
     reassignedTo: null, createdAt: iso(now() - 2 * HOUR), endedAt: iso(now() - 100 * MIN),
   },
   {
-    id: 3, orchestratorInstanceId: 1, accountId: 4, accountName: "Burner", model: null,
+    id: 3, orchestratorInstanceId: 1, accountId: 4, accountName: "Burner", engine: "claude", model: null,
     prompt: "Migrate settings storage to SQLite WAL", cwd: "C:\\Dev\\billing-api",
     folder: "C:\\Dev\\billing-api\\.commander-tasks\\w3-settings-sqlite-wal",
     status: "paused_at_limit", sessionId: "demo-worker-3", limitKind: "five_hour",
@@ -239,6 +240,8 @@ const workers: WorkerTask[] = [
     createdAt: iso(now() - 3 * HOUR), endedAt: iso(now() - 65 * MIN),
   },
 ];
+
+const demoPools: Pool[] = [];
 
 const handovers: HandoverRow[] = [
   {
@@ -297,6 +300,7 @@ function toUsage(a: DemoAccount): AccountUsage {
     name: a.name,
     configDir: a.configDir,
     email: a.email,
+    engine: "claude", // demo accounts are all claude
     plan: a.plan,
     fiveHourBudget: a.fiveHourBudget,
     weeklyBudget: a.weeklyBudget,
@@ -710,6 +714,7 @@ export function makeDemoIpc(real: IpcApi): IpcApi {
         orchestratorInstanceId: args.orchestratorInstanceId ?? null,
         accountId: args.accountId,
         accountName: acct?.name ?? "?",
+        engine: "claude",
         model: args.model ?? null,
         prompt: args.prompt,
         cwd: args.cwd,
@@ -795,6 +800,71 @@ export function makeDemoIpc(real: IpcApi): IpcApi {
     },
     // live activity capture only exists for real headless workers
     workerActivityLog: async () => [],
+
+    // engine accounts + pools — lightly simulated
+    addEngineAccount: async () => {
+      throw new Error("demo: Gemini/Codex accounts aren't simulated — install the app for the real thing");
+    },
+    createPool: async (args) => {
+      const p: Pool = {
+        id: nextId++,
+        name: args.name,
+        cwd: args.cwd,
+        goal: args.goal,
+        status: "idle",
+        createdAt: iso(now()),
+        members: args.members.map((m) => {
+          const a = accounts.find((x) => x.id === m.accountId);
+          return {
+            id: nextId++,
+            poolId: 0,
+            accountId: m.accountId,
+            accountName: a?.name ?? "?",
+            engine: "claude",
+            model: m.model,
+            instanceId: null,
+            status: "idle",
+            stuckSince: null,
+          };
+        }),
+      };
+      p.members.forEach((m) => (m.poolId = p.id));
+      demoPools.unshift(p);
+      return p;
+    },
+    listPools: async () => [...demoPools],
+    startPool: async (poolId) => {
+      const p = demoPools.find((x) => x.id === poolId);
+      if (!p) throw new Error("demo: no such pool");
+      p.status = "running";
+      p.members.forEach((m) => (m.status = "running"));
+      return p;
+    },
+    stopPool: async (poolId) => {
+      const p = demoPools.find((x) => x.id === poolId);
+      if (!p) throw new Error("demo: no such pool");
+      p.status = "stopped";
+      p.members.forEach((m) => (m.status = "idle"));
+      return p;
+    },
+    deletePool: async (poolId) => {
+      const i = demoPools.findIndex((x) => x.id === poolId);
+      if (i >= 0) demoPools.splice(i, 1);
+    },
+    poolBoard: async (poolId) => {
+      const p = demoPools.find((x) => x.id === poolId);
+      if (!p) throw new Error("demo: no such pool");
+      return {
+        goal: `# Pool goal — ${p.name}\n\n${p.goal}\n`,
+        chat: `# Pool chat — append only\n\n## ${p.members[0]?.accountName ?? "Agent"} — proposed split\nI'll take the backend half; who wants the UI?\n\n## ${p.members[1]?.accountName ?? "Peer"} — claiming UI\nTaking the UI tasks; will update plan.md.\n`,
+        plan: "# Pool plan\n\n| task | owner | status |\n|------|-------|--------|\n| backend endpoints | " +
+          `${p.members[0]?.accountName ?? "Agent"} | doing |\n| UI wiring | ${p.members[1]?.accountName ?? "Peer"} | todo |\n`,
+        result: null,
+      };
+    },
+    nudgePoolMember: async () => {
+      /* nothing to nudge in demo mode */
+    },
     mcpStatus: async () => {
       const s: McpStatus = {
         running: true,

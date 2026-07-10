@@ -13,6 +13,8 @@ const PLAN_PRESETS: Record<string, { fiveHour: number; weekly: number }> = {
   max20x: { fiveHour: 8_000_000, weekly: 60_000_000 },
 };
 
+const ENGINE_ICON: Record<string, string> = { claude: "✳", gemini: "◇", codex: "⬢" };
+
 function AccountRow({ account }: { account: AccountUsage }) {
   const toast = useStore((s) => s.toast);
   const refreshAccounts = useStore((s) => s.refreshAccounts);
@@ -68,6 +70,28 @@ function AccountRow({ account }: { account: AccountUsage }) {
       toast("error", String(e));
     }
   };
+
+  // gemini/codex accounts have no Claude plan/budgets — a slim row is all they need
+  if (account.engine !== "claude") {
+    return (
+      <div className="card acct-edit-row">
+        <div className="row wrap">
+          <span style={{ width: 20, textAlign: "center" }}>{ENGINE_ICON[account.engine] ?? "•"}</span>
+          <input style={{ width: 130 }} value={name} onChange={(e) => setName(e.target.value)} />
+          <span className="pill pill-mini st-available">{account.engine}</span>
+          <button className="btn btn-sm" onClick={save} disabled={saving}>
+            Save
+          </button>
+          <button className="btn btn-sm btn-ghost" onClick={remove} title="Remove this account from Commander">
+            Remove
+          </button>
+        </div>
+        <div className="dim small ellipsis" title={account.configDir}>
+          {account.engine} CLI account · {account.configDir} · usage meters / failover / warm-up are Claude-only
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="card acct-edit-row">
@@ -205,6 +229,19 @@ export default function SettingsView() {
       toast(
         "success",
         `Created "${acct.name}". Launch a Claude instance on it (+ New Claude) and sign in to run a second account.`,
+      );
+    } catch (e) {
+      toast("error", String(e));
+    }
+  };
+
+  const addEngine = async (engine: string) => {
+    try {
+      const acct = await ipc.addEngineAccount(engine);
+      await refreshAccounts();
+      toast(
+        "success",
+        `Added "${acct.name}" (${engine}). Launch a ${engine} terminal on it to sign in — then it can join pools and take delegated work.`,
       );
     } catch (e) {
       toast("error", String(e));
@@ -394,7 +431,13 @@ export default function SettingsView() {
           <h3>Accounts &amp; budgets</h3>
           <div className="row">
             <button className="btn btn-sm btn-primary" onClick={createAccount} title="Create a fresh, empty account slot to sign a new Claude account into">
-              ＋ Add account
+              ＋ Claude
+            </button>
+            <button className="btn btn-sm" onClick={() => addEngine("gemini")} title="Register the Gemini CLI (auth in ~/.gemini) so it can join pools and take delegated work">
+              ＋ Gemini
+            </button>
+            <button className="btn btn-sm" onClick={() => addEngine("codex")} title="Register a Codex CLI account (own CODEX_HOME per account) so it can join pools and take delegated work">
+              ＋ Codex
             </button>
             <button className="btn btn-sm" onClick={addFolder} title="Register an existing Claude config folder">
               Add folder…

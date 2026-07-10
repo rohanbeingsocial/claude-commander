@@ -12,6 +12,9 @@ export interface AccountUsage {
   name: string;
   configDir: string;
   email: string | null;
+  /** Which CLI this account signs into: "claude" | "gemini" | "codex". Meters,
+   *  failover and warm-up only apply to claude accounts. */
+  engine: string;
   plan: string;
   fiveHourBudget: number;
   weeklyBudget: number;
@@ -102,6 +105,8 @@ export interface WorkerTask {
   orchestratorInstanceId: number | null;
   accountId: number;
   accountName: string;
+  /** Which CLI runs this worker: "claude" | "gemini" | "codex". */
+  engine: string;
   model: string | null;
   prompt: string;
   cwd: string;
@@ -195,7 +200,40 @@ export interface FsEntry {
   isDir: boolean;
 }
 
-export type View = "terminals" | "accounts" | "projects" | "workers" | "settings";
+/** A pool: several AI agents (mixed engines/models) launched together in one folder to
+ *  pursue one goal as peers, coordinating over a shared board. See pools.rs. */
+export interface Pool {
+  id: number;
+  name: string;
+  cwd: string;
+  goal: string;
+  /** idle | running | done | stopped */
+  status: string;
+  createdAt: string;
+  members: PoolMember[];
+}
+
+export interface PoolMember {
+  id: number;
+  poolId: number;
+  accountId: number;
+  accountName: string;
+  engine: string;
+  model: string;
+  instanceId: number | null;
+  /** idle | running | limit_stuck | exited */
+  status: string;
+  stuckSince: string | null;
+}
+
+export interface PoolBoard {
+  goal: string;
+  chat: string;
+  plan: string;
+  result: string | null;
+}
+
+export type View = "terminals" | "accounts" | "projects" | "workers" | "pools" | "settings";
 export type SidebarMode = "expanded" | "icons" | "hidden";
 
 /** react-dnd item type for dragging a file from the explorer onto a task. */

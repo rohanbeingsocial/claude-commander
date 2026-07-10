@@ -67,7 +67,7 @@ export default function Dashboard() {
             <AccountCard
               key={a.id}
               account={a}
-              onLaunch={() => openLaunch({ accountId: a.id })}
+              onLaunch={() => openLaunch({ accountId: a.id, kind: a.engine === "claude" ? undefined : a.engine })}
               onToggle={async () => {
                 try {
                   await ipc.updateAccount({ accountId: a.id, enabled: !a.enabled });

@@ -18,11 +18,12 @@ fn row_to_account(r: &Row) -> rusqlite::Result<Account> {
         calibrated: r.get::<_, i64>(7)? != 0,
         enabled: r.get::<_, i64>(8)? != 0,
         limit_hit_until: r.get(9)?,
+        engine: r.get(10)?,
     })
 }
 
 const ACCOUNT_COLS: &str =
-    "id, name, config_dir, email, plan, five_hour_budget, weekly_budget, calibrated, enabled, limit_hit_until";
+    "id, name, config_dir, email, plan, five_hour_budget, weekly_budget, calibrated, enabled, limit_hit_until, engine";
 
 pub fn all(conn: &Connection) -> Result<Vec<Account>, String> {
     let mut stmt = conn
@@ -209,6 +210,71 @@ pub fn create_account(state: State<'_, AppState>, name: Option<String>) -> Resul
     get(&conn, id)
 }
 
+/// Register a Gemini CLI or Codex CLI account. Codex honours CODEX_HOME, so each codex
+/// account gets its own auth dir under ~/.codex-accounts/<n> (first one adopts ~/.codex if
+/// it exists). Gemini CLI has no config-dir override — its auth is global (~/.gemini), so
+/// one gemini account represents that identity.
+#[tauri::command]
+pub fn add_engine_account(state: State<'_, AppState>, engine: String, name: Option<String>) -> Result<Account, String> {
+    if engine != "gemini" && engine != "codex" {
+        return Err("engine must be gemini or codex".into());
+    }
+    let home = dirs::home_dir().ok_or("cannot resolve home directory")?;
+    let conn = state.db.lock().unwrap();
+    let dir = if engine == "gemini" {
+        let d = home.join(".gemini");
+        let existing: Option<i64> = conn
+            .query_row("SELECT id FROM accounts WHERE engine='gemini'", [], |r| r.get(0))
+            .ok();
+        if existing.is_some() {
+            return Err("A Gemini account already exists — the Gemini CLI has one global sign-in (~/.gemini).".into());
+        }
+        d
+    } else {
+        // first codex account adopts the default ~/.codex; later ones get isolated homes
+        let default_home = home.join(".codex");
+        let default_taken: bool = conn
+            .query_row(
+                "SELECT 1 FROM accounts WHERE config_dir=?1",
+                [default_home.to_string_lossy().to_string()],
+                |_| Ok(()),
+            )
+            .is_ok();
+        if !default_taken {
+            default_home
+        } else {
+            let base = home.join(".codex-accounts");
+            fs::create_dir_all(&base).map_err(|e| e.to_string())?;
+            let mut n = 2u32;
+            loop {
+                let cand = base.join(n.to_string());
+                let taken: bool = conn
+                    .query_row("SELECT 1 FROM accounts WHERE config_dir=?1", [cand.to_string_lossy().to_string()], |_| Ok(()))
+                    .is_ok();
+                if !taken {
+                    break cand; // unregistered slot (existing dir is adopted, fresh one is created)
+                }
+                n += 1;
+            }
+        }
+    };
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let cfg = dir.to_string_lossy().to_string();
+    let label = name
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| if engine == "gemini" { "Gemini".into() } else { "Codex".into() });
+    conn.execute(
+        "INSERT INTO accounts(name, config_dir, engine) VALUES(?1,?2,?3) ON CONFLICT(config_dir) DO UPDATE SET name=excluded.name, engine=excluded.engine",
+        params![label, cfg, engine],
+    )
+    .map_err(|e| e.to_string())?;
+    let id: i64 = conn
+        .query_row("SELECT id FROM accounts WHERE config_dir=?1", [&cfg], |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+    get(&conn, id)
+}
+
 #[tauri::command]
 pub fn remove_account(state: State<'_, AppState>, account_id: i64) -> Result<(), String> {
     let conn = state.db.lock().unwrap();
@@ -223,7 +289,7 @@ pub fn rescan_usage(app: tauri::AppHandle) -> Result<Vec<AccountUsage>, String> 
     let accounts: Vec<(i64, String)> = {
         let conn = state.db.lock().unwrap();
         let mut stmt = conn
-            .prepare("SELECT id, config_dir FROM accounts WHERE enabled=1")
+            .prepare("SELECT id, config_dir FROM accounts WHERE enabled=1 AND engine='claude'")
             .map_err(|e| e.to_string())?;
         let rows = stmt
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
@@ -268,6 +334,13 @@ pub fn boot(conn: &Connection) {
         ("gemini_path", ""),
         ("codex_path", ""),
         ("worker_extra_args_default", "--dangerously-skip-permissions"),
+        // headless workers on other engines need their own auto-approve flags
+        ("worker_args_gemini", "--yolo"),
+        ("worker_args_codex", "--full-auto"),
+        // extra args for pool members' interactive terminals, per engine
+        ("pool_args_claude", ""),
+        ("pool_args_gemini", ""),
+        ("pool_args_codex", ""),
     ] {
         let _ = conn.execute("INSERT OR IGNORE INTO settings(key,value) VALUES(?1,?2)", params![k, v]);
     }

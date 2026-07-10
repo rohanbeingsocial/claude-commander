@@ -2,6 +2,16 @@
  *  module also loads outside a browser, e.g. in the headless demo smoke test.) */
 export const IS_MAC = typeof navigator !== "undefined" && navigator.platform.toUpperCase().includes("MAC");
 
+/** Small glyph per engine, used wherever an account/worker/member names its CLI. */
+export const ENGINE_ICON: Record<string, string> = { claude: "✳", gemini: "◇", codex: "⬢" };
+
+/** Suggested model ids per engine — free-text inputs use these as datalist entries. */
+export const MODEL_SUGGESTIONS: Record<string, string[]> = {
+  claude: ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5-20251001"],
+  gemini: ["gemini-2.5-pro", "gemini-2.5-flash"],
+  codex: ["gpt-5-codex", "o3", "o4-mini"],
+};
+
 export function b64decode(s: string): Uint8Array {
   const bin = atob(s);
   const out = new Uint8Array(bin.length);

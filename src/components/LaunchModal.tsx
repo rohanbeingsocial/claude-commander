@@ -103,9 +103,20 @@ export default function LaunchModal() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [launchOpen, projectId]);
 
-  // the saved default args are Claude flags — don't leak them into other engines
+  // accounts that fit the chosen type: claude sessions need claude accounts; gemini/codex
+  // terminals take their own engine's accounts or a claude account (global CLI auth then)
+  const fitsKind = (engine: string) =>
+    kind === "shell" ? true : kind === "claude" ? engine === "claude" : engine === kind || engine === "claude";
+  const visibleAccounts = accounts.filter((a) => a.enabled && fitsKind(a.engine));
+
+  // the saved default args are Claude flags — don't leak them into other engines; and a
+  // selected account that doesn't fit the new type gets swapped for one that does
   useEffect(() => {
     setExtraArgs(kind === "claude" ? settings.extra_args_default ?? "" : "");
+    setAccountId((cur) => {
+      const still = cur != null && accounts.some((a) => a.id === cur && a.enabled && fitsKind(a.engine));
+      return still ? cur : accounts.find((a) => a.enabled && fitsKind(a.engine))?.id ?? null;
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kind]);
 
@@ -216,28 +227,25 @@ export default function LaunchModal() {
 
         <label className="field-label">Account</label>
         <div className="rec-list">
-          {accounts
-            .filter((a) => a.enabled)
-            .map((a) => {
-              const r = recFor(a.id);
-              return (
-                <button
-                  key={a.id}
-                  className={`rec-item ${accountId === a.id ? "rec-active" : ""}`}
-                  onClick={() => setAccountId(a.id)}
-                >
-                  <span>
-                    <span className={`status-dot st-${a.status}`} />
-                    {a.name}
-                    {a.id === bestId && <span className="best-badge">★ best</span>}
-                  </span>
-                  <span className="dim small">{r ? r.reason : ""}</span>
-                </button>
-              );
-            })}
-          {accounts.filter((a) => a.enabled).length === 0 && (
-            <div className="dim">No enabled accounts. Check Settings.</div>
-          )}
+          {visibleAccounts.map((a) => {
+            const r = recFor(a.id);
+            return (
+              <button
+                key={a.id}
+                className={`rec-item ${accountId === a.id ? "rec-active" : ""}`}
+                onClick={() => setAccountId(a.id)}
+              >
+                <span>
+                  <span className={`status-dot st-${a.status}`} />
+                  {a.name}
+                  {a.engine !== "claude" && <span className="dim small"> ({a.engine})</span>}
+                  {a.id === bestId && kind === "claude" && <span className="best-badge">★ best</span>}
+                </span>
+                <span className="dim small">{a.engine === "claude" ? (r ? r.reason : "") : `${a.engine} CLI auth`}</span>
+              </button>
+            );
+          })}
+          {visibleAccounts.length === 0 && <div className="dim">No enabled accounts fit this type. Check Settings.</div>}
         </div>
 
         <label className="field-label">Project</label>
@@ -351,8 +359,11 @@ export default function LaunchModal() {
                       />
                       <span className={`status-dot st-${a.status}`} />
                       {a.name}
+                      {a.engine !== "claude" && <span className="dim small"> ({a.engine})</span>}
                     </span>
-                    <span className="dim small">5h {Math.min(Math.round(a.fiveHour.pct), 999)}%</span>
+                    <span className="dim small">
+                      {a.engine === "claude" ? `5h ${Math.min(Math.round(a.fiveHour.pct), 999)}%` : `runs the ${a.engine} CLI`}
+                    </span>
                   </label>
                 ))}
               {accounts.filter((a) => a.enabled && a.id !== accountId).length === 0 && (

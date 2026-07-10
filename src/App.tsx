@@ -13,6 +13,7 @@ import { initPtyRouting } from "./terminals";
 import { IS_MAC } from "./util";
 import type { AccountUsage, FailoverDoneEv, LimitHitEv, PtyExitEv, ToastEv, View, WorkerActivity } from "./types";
 import Dashboard from "./views/Dashboard";
+import PoolsView from "./views/PoolsView";
 import Projects from "./views/Projects";
 import SettingsView from "./views/SettingsView";
 import TerminalGrid from "./views/TerminalGrid";
@@ -23,7 +24,8 @@ const NAV: { view: View; label: string; icon: string; kbd: string }[] = [
   { view: "accounts", label: "Accounts", icon: "◉", kbd: "2" },
   { view: "projects", label: "Projects", icon: "❏", kbd: "3" },
   { view: "workers", label: "Workers", icon: "⚡", kbd: "4" },
-  { view: "settings", label: "Settings", icon: "⚙", kbd: "5" },
+  { view: "pools", label: "Pools", icon: "⛁", kbd: "5" },
+  { view: "settings", label: "Settings", icon: "⚙", kbd: "6" },
 ];
 
 const SIDEBAR_WIDTH = { expanded: 240, icons: 56, hidden: 0 } as const;
@@ -85,6 +87,10 @@ export default function App() {
             // via MCP moments ago) — pull the list so the ticker can name it
             if (!s.workers.some((w) => w.id === e.payload.workerId)) s.refreshWorkers();
           }),
+          listen("pools-updated", () => {
+            useStore.getState().refreshPools();
+            useStore.getState().refreshInstances();
+          }),
         ];
 
     const onKey = (ev: KeyboardEvent) => {
@@ -101,7 +107,7 @@ export default function App() {
       } else if (ev.key === "n" || ev.key === "N") {
         s.openLaunch();
         ev.preventDefault();
-      } else if (ev.key >= "1" && ev.key <= "5") {
+      } else if (ev.key >= "1" && ev.key <= "6") {
         const nav = NAV[Number(ev.key) - 1];
         if (nav) {
           s.setView(nav.view);
@@ -215,6 +221,7 @@ export default function App() {
         {view === "accounts" && <Dashboard />}
         {view === "projects" && <Projects />}
         {view === "workers" && <WorkersView />}
+        {view === "pools" && <PoolsView />}
         {view === "settings" && <SettingsView />}
       </main>
 

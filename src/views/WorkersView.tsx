@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { open } from "../dialog";
 import { ipc } from "../ipc";
 import { useStore } from "../store";
+import { ENGINE_ICON, MODEL_SUGGESTIONS } from "../util";
 import type { ClosureReport, McpStatus, WorkerActivity, WorkerTask, WorkerUsage } from "../types";
 
 /** Icon per live-activity kind (see WorkerActivity). */
@@ -12,14 +13,6 @@ const ACT_ICON: Record<string, string> = {
   result: "🏁",
   status: "•",
 };
-
-const MODELS: { id: string; label: string }[] = [
-  { id: "", label: "Account default" },
-  { id: "claude-opus-4-8", label: "Opus 4.8" },
-  { id: "claude-sonnet-5", label: "Sonnet 5" },
-  { id: "claude-haiku-4-5-20251001", label: "Haiku 4.5" },
-  { id: "claude-fable-5", label: "Fable 5" },
-];
 
 const STATUS_ICON: Record<string, string> = {
   running: "⏳",
@@ -69,9 +62,19 @@ export default function WorkersView() {
     return () => clearInterval(t);
   }, [refreshWorkers]);
 
+  const selectedEngine = accounts.find((a) => a.id === accountId)?.engine ?? "claude";
+
+  // seed the CLI args for the SELECTED account's engine (each needs its own bypass flag)
   useEffect(() => {
-    setExtraArgs(settings.worker_extra_args_default ?? "");
-  }, [settings]);
+    const def =
+      selectedEngine === "gemini"
+        ? settings.worker_args_gemini ?? "--yolo"
+        : selectedEngine === "codex"
+          ? settings.worker_args_codex ?? "--full-auto"
+          : settings.worker_extra_args_default ?? "";
+    setExtraArgs(def);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings, selectedEngine]);
 
   useEffect(() => {
     if (accountId == null && accounts.length) setAccountId(accounts.find((a) => a.enabled)?.id ?? null);
@@ -170,30 +173,46 @@ export default function WorkersView() {
         <div className="row wrap">
           <label className="inline-label">
             Account
-            <select value={accountId ?? ""} onChange={(e) => setAccountId(e.target.value ? Number(e.target.value) : null)}>
+            <select
+              value={accountId ?? ""}
+              onChange={(e) => {
+                setAccountId(e.target.value ? Number(e.target.value) : null);
+                setModel("");
+              }}
+            >
               <option value="">— pick —</option>
               {accounts
                 .filter((a) => a.enabled)
                 .map((a) => (
                   <option key={a.id} value={a.id}>
-                    {a.name} · 5h {Math.min(Math.round(a.fiveHour.pct), 999)}%
+                    {ENGINE_ICON[a.engine] ?? "•"} {a.name} ({a.engine})
+                    {a.engine === "claude" ? ` · 5h ${Math.min(Math.round(a.fiveHour.pct), 999)}%` : ""}
                   </option>
                 ))}
             </select>
           </label>
           <label className="inline-label">
             Model
-            <select value={model} onChange={(e) => setModel(e.target.value)}>
-              {MODELS.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.label}
-                </option>
-              ))}
-            </select>
+            <input
+              style={{ width: 220 }}
+              list={`worker-models-${selectedEngine}`}
+              placeholder={`account default (${selectedEngine})`}
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+            />
           </label>
-          <button className="btn btn-sm" onClick={checkUsage} title="Read this account's real usage from Claude Code's status line">
-            Check real usage
-          </button>
+          {Object.entries(MODEL_SUGGESTIONS).map(([eng, models]) => (
+            <datalist id={`worker-models-${eng}`} key={eng}>
+              {models.map((m) => (
+                <option key={m} value={m} />
+              ))}
+            </datalist>
+          ))}
+          {selectedEngine === "claude" && (
+            <button className="btn btn-sm" onClick={checkUsage} title="Read this account's real usage from Claude Code's status line">
+              Check real usage
+            </button>
+          )}
         </div>
         {usage && (
           <div className="info-box dim small">
@@ -356,7 +375,9 @@ function WorkerRow({
     <div className="card acct-edit-row">
       <div className="row wrap" style={{ justifyContent: "space-between" }}>
         <span>
-          {STATUS_ICON[w.status] ?? "•"} <strong>{statusLabel(w.status)}</strong> · {w.accountName}
+          {STATUS_ICON[w.status] ?? "•"} <strong>{statusLabel(w.status)}</strong> · {ENGINE_ICON[w.engine] ?? "•"}{" "}
+          {w.accountName}
+          {w.engine !== "claude" ? ` (${w.engine})` : ""}
           {w.model ? ` · ${w.model}` : ""}
         </span>
         <span className="row">

@@ -230,14 +230,14 @@ fn tool_defs() -> Value {
         },
         {
             "name": "delegate",
-            "description": "Spawn a headless worker Claude on a pool account to do a subtask. The worker gets distilled orchestrator context, keeps progress.md updated, and writes result.md. Returns the worker id.",
+            "description": "Spawn a headless worker on a pool account to do a subtask. The account's engine decides which CLI runs it: a Claude account runs claude, a Gemini account runs the gemini CLI, a Codex account runs the codex CLI — so work can be spread across providers. The worker gets distilled orchestrator context, keeps progress.md updated, and writes result.md. Returns the worker id.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "task": { "type": "string", "description": "The subtask for the worker to do." },
                     "account_id": { "type": "integer", "description": "Pool account id. Omit to auto-pick the account with the most headroom." },
                     "account_name": { "type": "string", "description": "Pool account name (alternative to account_id)." },
-                    "model": { "type": "string", "description": "Optional model id, e.g. claude-sonnet-5 or claude-opus-4-8." },
+                    "model": { "type": "string", "description": "Optional model id for that engine, e.g. claude-sonnet-5, gemini-2.5-pro, or gpt-5-codex." },
                     "context_refs": { "type": "array", "items": { "type": "string" }, "description": "Repo-relative files the worker should read first." },
                     "cwd": { "type": "string", "description": "Working directory; defaults to the orchestrator's own cwd." }
                 },

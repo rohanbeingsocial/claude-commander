@@ -20,7 +20,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 const WORKER_SELECT: &str = "SELECT w.id, w.orchestrator_instance_id, w.account_id, a.name, w.model, w.prompt, \
      w.cwd, w.folder, w.status, w.session_id, w.limit_kind, w.frees_at, w.exit_code, \
-     w.result_summary, w.reassigned_to, w.created_at, w.ended_at \
+     w.result_summary, w.reassigned_to, w.created_at, w.ended_at, w.engine \
      FROM worker_tasks w JOIN accounts a ON a.id=w.account_id";
 
 fn row_to_worker(r: &Row) -> rusqlite::Result<WorkerTask> {
@@ -42,7 +42,18 @@ fn row_to_worker(r: &Row) -> rusqlite::Result<WorkerTask> {
         reassigned_to: r.get(14)?,
         created_at: r.get(15)?,
         ended_at: r.get(16)?,
+        engine: r.get(17)?,
     })
+}
+
+/// Per-engine default CLI args for headless workers (each engine needs its own
+/// auto-approve flag to be able to edit files unattended).
+fn engine_default_args(conn: &Connection, engine: &str) -> String {
+    match engine {
+        "gemini" => db::get_setting(conn, "worker_args_gemini").unwrap_or_else(|| "--yolo".into()),
+        "codex" => db::get_setting(conn, "worker_args_codex").unwrap_or_else(|| "--full-auto".into()),
+        _ => db::get_setting(conn, "worker_extra_args_default").unwrap_or_default(),
+    }
 }
 
 fn get_worker(conn: &Connection, id: i64) -> Result<WorkerTask, String> {
@@ -79,30 +90,67 @@ fn live_reset(config_dir: &str, kind: &str) -> Option<String> {
     epoch_iso(w.resets_at)
 }
 
-fn build_worker_command(claude: &str, cwd: &str, config_dir: &str, model: &Option<String>, extra_args: &str) -> Command {
-    // npm installs land claude as a .cmd shim on Windows, which needs cmd.exe to run
+/// Build the headless worker process for any engine. The prompt is included here because
+/// each engine takes it differently (claude: trailing positional; gemini: value of -p;
+/// codex: positional after `exec`).
+fn build_worker_command(
+    program: &str,
+    engine: &str,
+    cwd: &str,
+    config_dir: &str,
+    model: &Option<String>,
+    extra_args: &str,
+    prompt: &str,
+) -> Command {
+    // npm installs land these CLIs as .cmd shims on Windows, which need cmd.exe to run
     #[cfg(windows)]
     let mut cmd = {
-        let lower = claude.to_lowercase();
+        let lower = program.to_lowercase();
         if lower.ends_with(".cmd") || lower.ends_with(".bat") {
             let mut c = Command::new("cmd.exe");
             c.arg("/c");
-            c.arg(claude);
+            c.arg(program);
             c
         } else {
-            Command::new(claude)
+            Command::new(program)
         }
     };
     #[cfg(not(windows))]
-    let mut cmd = Command::new(claude);
-    cmd.arg("-p").arg("--output-format").arg("stream-json").arg("--verbose");
-    if let Some(m) = model {
-        if !m.trim().is_empty() {
-            cmd.arg("--model").arg(m);
+    let mut cmd = Command::new(program);
+    let model = model.as_deref().map(str::trim).filter(|m| !m.is_empty());
+    match engine {
+        "gemini" => {
+            // non-interactive: prints the run as plain text and exits
+            if let Some(m) = model {
+                cmd.arg("-m").arg(m);
+            }
+            for a in extra_args.split_whitespace() {
+                cmd.arg(a);
+            }
+            cmd.arg("-p").arg(prompt);
         }
-    }
-    for a in extra_args.split_whitespace() {
-        cmd.arg(a);
+        "codex" => {
+            cmd.arg("exec");
+            if let Some(m) = model {
+                cmd.arg("--model").arg(m);
+            }
+            for a in extra_args.split_whitespace() {
+                cmd.arg(a);
+            }
+            cmd.arg(prompt);
+            // codex honours CODEX_HOME — the account's config dir is its auth home
+            cmd.env("CODEX_HOME", config_dir);
+        }
+        _ => {
+            cmd.arg("-p").arg("--output-format").arg("stream-json").arg("--verbose");
+            if let Some(m) = model {
+                cmd.arg("--model").arg(m);
+            }
+            for a in extra_args.split_whitespace() {
+                cmd.arg(a);
+            }
+            cmd.arg(prompt);
+        }
     }
     cmd.current_dir(cwd);
     cmd.env("CLAUDE_CONFIG_DIR", config_dir);
@@ -117,10 +165,12 @@ fn build_worker_command(claude: &str, cwd: &str, config_dir: &str, model: &Optio
 
 /// Spawn the worker process, feed it the prompt on stdin, and monitor it on a background
 /// thread: stream output to `stream.jsonl`, then finalize on exit. Returns the pid.
+#[allow(clippy::too_many_arguments)]
 fn spawn_and_monitor(
     app: &AppHandle,
     worker_id: i64,
-    claude: &str,
+    program: &str,
+    engine: &str,
     cwd: &str,
     config_dir: &str,
     model: &Option<String>,
@@ -128,11 +178,9 @@ fn spawn_and_monitor(
     prompt: &str,
     folder_abs: &Path,
 ) -> Result<u32, String> {
-    let mut cmd = build_worker_command(claude, cwd, config_dir, model, extra_args);
-    // the task itself is the trailing positional prompt: `claude -p … "<prompt>"`
-    cmd.arg(prompt);
+    let mut cmd = build_worker_command(program, engine, cwd, config_dir, model, extra_args, prompt);
     cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
-    let mut child = cmd.spawn().map_err(|e| format!("Failed to start worker claude: {e}"))?;
+    let mut child = cmd.spawn().map_err(|e| format!("Failed to start {engine} worker: {e}"))?;
     let pid = child.id();
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
@@ -187,7 +235,14 @@ fn spawn_and_monitor(
 /// Turn one stream-json line into displayable activity items (usually 0 or 1; an assistant
 /// message with several tool calls yields several).
 fn parse_activity(line: &str) -> Vec<(String, String)> {
-    let Ok(v) = serde_json::from_str::<Value>(line) else { return Vec::new() };
+    let Ok(v) = serde_json::from_str::<Value>(line) else {
+        // plain-text engines (gemini, codex exec): every non-empty line is activity
+        let t = line.trim();
+        if t.is_empty() {
+            return Vec::new();
+        }
+        return vec![("text".into(), crate::handover::truncate_chars(t, 220))];
+    };
     let mut out: Vec<(String, String)> = Vec::new();
     match v.get("type").and_then(|t| t.as_str()) {
         Some("system") => {
@@ -274,19 +329,27 @@ fn push_activity(app: &AppHandle, worker_id: i64, (kind, detail): (String, Strin
 /// the DB, notify the UI, then apply the limit-hit policy (pause-and-ask by default).
 fn finalize(app: &AppHandle, worker_id: i64, code: i64, stdout_tail: &str, stderr_text: &str) {
     let state = app.state::<AppState>();
-    let row: Option<(String, String, i64, String, String)> = {
+    let row: Option<(String, String, i64, String, String, String)> = {
         let conn = state.db.lock().unwrap();
         conn.query_row(
-            "SELECT w.cwd, a.config_dir, w.account_id, a.name, w.folder FROM worker_tasks w JOIN accounts a ON a.id=w.account_id WHERE w.id=?1",
+            "SELECT w.cwd, a.config_dir, w.account_id, a.name, w.folder, w.engine FROM worker_tasks w JOIN accounts a ON a.id=w.account_id WHERE w.id=?1",
             [worker_id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
         )
         .ok()
     };
-    let Some((cwd, cfg, account_id, account_name, folder)) = row else { return };
+    let Some((cwd, cfg, account_id, account_name, folder, engine)) = row else { return };
+    let is_claude = engine == "claude";
 
     let combined = format!("{stdout_tail}\n{stderr_text}");
-    let limit = crate::pty::detect_limit(&crate::pty::strip_ansi(&combined));
+    let plain = crate::pty::strip_ansi(&combined);
+    let limit: Option<&'static str> = if is_claude {
+        crate::pty::detect_limit(&plain)
+    } else if crate::pty::detect_engine_limit(&plain) {
+        Some("engine")
+    } else {
+        None
+    };
     let status = if limit.is_some() {
         "paused_at_limit"
     } else if code == 0 {
@@ -294,12 +357,17 @@ fn finalize(app: &AppHandle, worker_id: i64, code: i64, stdout_tail: &str, stder
     } else {
         "failed"
     };
-    let session_id = crate::failover::find_latest_session(&cfg, &cwd).map(|(s, _)| s);
+    let session_id = if is_claude {
+        crate::failover::find_latest_session(&cfg, &cwd).map(|(s, _)| s)
+    } else {
+        None
+    };
     let result_summary = fs::read_to_string(Path::new(&folder).join("result.md"))
         .ok()
         .map(|s| crate::handover::truncate_chars(s.trim(), 4000))
         .filter(|s| !s.is_empty());
-    let frees_at = limit.and_then(|kind| live_reset(&cfg, kind));
+    // only claude publishes its real reset time; other engines cool down on a timer
+    let frees_at = if is_claude { limit.and_then(|kind| live_reset(&cfg, kind)) } else { None };
 
     {
         let conn = state.db.lock().unwrap();
@@ -307,9 +375,11 @@ fn finalize(app: &AppHandle, worker_id: i64, code: i64, stdout_tail: &str, stder
             "UPDATE worker_tasks SET status=?1, session_id=coalesce(?2,session_id), limit_kind=?3, frees_at=?4, exit_code=?5, result_summary=?6, ended_at=?7 WHERE id=?8",
             params![status, session_id, limit, frees_at, code, result_summary, db::now_str(), worker_id],
         );
-        let _ = usage::scan_account(&conn, account_id, &cfg);
-        if let Some(kind) = limit {
-            let _ = usage::calibrate_on_limit(&conn, account_id, kind);
+        if is_claude {
+            let _ = usage::scan_account(&conn, account_id, &cfg);
+            if let Some(kind) = limit {
+                let _ = usage::calibrate_on_limit(&conn, account_id, kind);
+            }
         }
     }
 
@@ -479,7 +549,7 @@ fn delegate_core(
     cwd: &str,
     task_prompt: &str,
     model: Option<String>,
-    extra_args: &str,
+    extra_args: Option<&str>,
     context_refs: &[String],
 ) -> Result<WorkerTask, String> {
     let state = app.state::<AppState>();
@@ -489,24 +559,44 @@ fn delegate_core(
     if task_prompt.trim().is_empty() {
         return Err("Task prompt is empty".into());
     }
-    let claude = state.claude_path.lock().unwrap().clone();
-    if claude.is_empty() {
-        return Err("claude executable not found — set the path in Settings".into());
-    }
-    let (config_dir, account_name, enabled): (String, String, bool) = {
+    let (config_dir, account_name, enabled, engine): (String, String, bool, String) = {
         let conn = state.db.lock().unwrap();
         conn.query_row(
-            "SELECT config_dir, name, enabled FROM accounts WHERE id=?1",
+            "SELECT config_dir, name, enabled, engine FROM accounts WHERE id=?1",
             [account_id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get::<_, i64>(2)? != 0)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get::<_, i64>(2)? != 0, r.get(3)?)),
         )
         .map_err(|_| "Account not found".to_string())?
     };
     if !enabled {
         return Err(format!("{account_name} is disabled"));
     }
-    // make sure the worker account writes its real rate limits (for usage + reset times)
-    crate::statusline::ensure_tap_for(app, &config_dir);
+    // which CLI runs this worker — the account's engine decides
+    let program = if engine == "claude" {
+        let p = state.claude_path.lock().unwrap().clone();
+        if p.is_empty() {
+            return Err("claude executable not found — set the path in Settings".into());
+        }
+        p
+    } else {
+        let conn = state.db.lock().unwrap();
+        let p = crate::misc::resolve_engine(&conn, &engine);
+        if p.is_empty() {
+            return Err(format!("{engine} executable not found — install the {engine} CLI or set its path in Settings"));
+        }
+        p
+    };
+    let extra_args: String = match extra_args {
+        Some(e) => e.to_string(),
+        None => {
+            let conn = state.db.lock().unwrap();
+            engine_default_args(&conn, &engine)
+        }
+    };
+    // make sure a claude worker account writes its real rate limits (usage + reset times)
+    if engine == "claude" {
+        crate::statusline::ensure_tap_for(app, &config_dir);
+    }
 
     let orch_label = orchestrator_instance_id
         .and_then(|iid| {
@@ -524,9 +614,9 @@ fn delegate_core(
     let worker_id: i64 = {
         let conn = state.db.lock().unwrap();
         conn.execute(
-            "INSERT INTO worker_tasks(orchestrator_instance_id, account_id, model, prompt, cwd, folder, status) \
-             VALUES(?1,?2,?3,?4,?5,'','running')",
-            params![orchestrator_instance_id, account_id, model, task_prompt, cwd],
+            "INSERT INTO worker_tasks(orchestrator_instance_id, account_id, model, prompt, cwd, folder, status, engine) \
+             VALUES(?1,?2,?3,?4,?5,'','running',?6)",
+            params![orchestrator_instance_id, account_id, model, task_prompt, cwd, engine],
         )
         .map_err(|e| e.to_string())?;
         conn.last_insert_rowid()
@@ -560,7 +650,7 @@ fn delegate_core(
          - When finished, write your final result/answer to `{result_rel}`.\n"
     );
 
-    match spawn_and_monitor(app, worker_id, &claude, cwd, &config_dir, &model, extra_args, &effective_prompt, &folder_abs) {
+    match spawn_and_monitor(app, worker_id, &program, &engine, cwd, &config_dir, &model, &extra_args, &effective_prompt, &folder_abs) {
         Ok(pid) => {
             let conn = state.db.lock().unwrap();
             let _ = conn.execute("UPDATE worker_tasks SET pid=?1 WHERE id=?2", params![pid as i64, worker_id]);
@@ -633,10 +723,6 @@ fn reassign_core(app: &AppHandle, worker_id: i64, target: Option<i64>) -> Result
         Some(t) => t,
         None => pick_pool_account(app, orch_id, account_id)?,
     };
-    let extra_args = {
-        let conn = state.db.lock().unwrap();
-        db::get_setting(&conn, "worker_extra_args_default").unwrap_or_default()
-    };
     // reference the prior worker's checkpoint + result so the new worker continues, not restarts
     let rel = |name: &str| -> String {
         let p = Path::new(&folder).join(name);
@@ -649,7 +735,8 @@ fn reassign_core(app: &AppHandle, worker_id: i64, target: Option<i64>) -> Result
          first, confirm what is already done (including on-disk changes), and finish the remaining work.\n\n\
          Original task:\n{prompt}"
     );
-    let nw = delegate_core(app, orch_id, target_account, &cwd, &cont_prompt, model, &extra_args, &refs)?;
+    // None = the target account's engine-appropriate default args
+    let nw = delegate_core(app, orch_id, target_account, &cwd, &cont_prompt, model, None, &refs)?;
     {
         let conn = state.db.lock().unwrap();
         let _ = conn.execute("UPDATE worker_tasks SET reassigned_to=?1 WHERE id=?2", params![nw.id, worker_id]);
@@ -680,14 +767,6 @@ pub fn delegate_worker(
     extra_args: Option<String>,
     context_refs: Option<Vec<String>>,
 ) -> Result<WorkerTask, String> {
-    let extra = match extra_args {
-        Some(e) => e,
-        None => {
-            let state = app.state::<AppState>();
-            let conn = state.db.lock().unwrap();
-            db::get_setting(&conn, "worker_extra_args_default").unwrap_or_default()
-        }
-    };
     delegate_core(
         &app,
         orchestrator_instance_id,
@@ -695,7 +774,7 @@ pub fn delegate_worker(
         &cwd,
         &prompt,
         model,
-        &extra,
+        extra_args.as_deref(),
         &context_refs.unwrap_or_default(),
     )
 }
@@ -716,27 +795,38 @@ pub fn worker_activity_log(state: State<'_, AppState>) -> Result<Vec<crate::mode
 /// restarting. Runs from the background scanner loop.
 pub fn auto_wake_workers_tick(app: &AppHandle) {
     let state = app.state::<AppState>();
-    let rows: Vec<(i64, i64, Option<String>)> = {
+    let rows: Vec<(i64, i64, Option<String>, String, Option<String>)> = {
         let conn = state.db.lock().unwrap();
         if db::get_setting(&conn, "auto_wake_workers").as_deref() != Some("1") {
             return;
         }
         conn.prepare(
-            "SELECT id, account_id, frees_at FROM worker_tasks WHERE status='paused_at_limit' AND reassigned_to IS NULL",
+            "SELECT id, account_id, frees_at, engine, ended_at FROM worker_tasks WHERE status='paused_at_limit' AND reassigned_to IS NULL",
         )
         .and_then(|mut s| {
-            s.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            s.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))
                 .map(|rows| rows.flatten().collect())
         })
         .unwrap_or_default()
     };
-    for (worker_id, account_id, frees_at) in rows {
-        // trust the recorded reset time when we have one; otherwise ask the account
+    for (worker_id, account_id, frees_at, engine, ended_at) in rows {
         if let Some(t) = frees_at.as_deref().and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok()) {
+            // trust the recorded reset time when we have one
             if t.with_timezone(&chrono::Utc) > chrono::Utc::now() {
                 continue;
             }
+        } else if engine != "claude" {
+            // other engines publish no reset time — retry after a 30-minute cool-down
+            let cooled = ended_at
+                .as_deref()
+                .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+                .map(|t| chrono::Utc::now() - t.with_timezone(&chrono::Utc) > chrono::Duration::minutes(30))
+                .unwrap_or(true);
+            if !cooled {
+                continue;
+            }
         } else {
+            // claude without a recorded reset — ask the account's live/estimated status
             let usable = {
                 let conn = state.db.lock().unwrap();
                 crate::accounts::get(&conn, account_id)
@@ -1050,12 +1140,7 @@ pub fn delegate_from_orchestrator(
         Some(a) => a,
         None => pick_pool_account(app, Some(orch_id), -1)?,
     };
-    let extra = {
-        let state = app.state::<AppState>();
-        let conn = state.db.lock().unwrap();
-        db::get_setting(&conn, "worker_extra_args_default").unwrap_or_default()
-    };
-    delegate_core(app, Some(orch_id), account_id, &cwd, &prompt, model, &extra, &refs)
+    delegate_core(app, Some(orch_id), account_id, &cwd, &prompt, model, None, &refs)
 }
 
 /// Adopt orphaned workers: re-parent workers (same cwd) whose orchestrator instance is dead

@@ -1,5 +1,5 @@
 import type { AccountUsage } from "../types";
-import { minsUntil, relTime, STATUS_LABEL } from "../util";
+import { ENGINE_ICON, minsUntil, relTime, STATUS_LABEL } from "../util";
 import UsageBar from "./UsageBar";
 
 export default function AccountCard({
@@ -17,6 +17,39 @@ export default function AccountCard({
   const resets = minsUntil(a.fiveHour.resetsAt);
   const weeklyResets = minsUntil(a.weekly.resetsAt);
   const coolingUntil = minsUntil(a.limitHitUntil);
+
+  // gemini/codex accounts have no Claude usage windows — show a slim identity card
+  if (a.engine !== "claude") {
+    return (
+      <div className={`card account-card ${a.enabled ? "" : "card-disabled"}`}>
+        <div className="card-head">
+          <div>
+            <span className={`status-dot st-${a.status}`} />
+            <strong>
+              {ENGINE_ICON[a.engine] ?? "•"} {a.name}
+            </strong>
+          </div>
+          <span className="pill st-available">{a.engine}</span>
+        </div>
+        <div className="dim small ellipsis" title={a.configDir}>
+          {a.engine} CLI account · {a.configDir}
+        </div>
+        <div className="dim small">
+          No usage meters — the {a.engine} CLI doesn't publish rate-limit windows. It can run grid terminals, take
+          delegated worker tasks, and join pools.
+        </div>
+        <div className="card-actions">
+          <button className="btn btn-primary btn-sm" onClick={onLaunch} disabled={!a.enabled}>
+            Launch
+          </button>
+          <button className="btn btn-ghost btn-sm" onClick={onToggle}>
+            {a.enabled ? "Disable" : "Enable"}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className={`card account-card ${a.enabled ? "" : "card-disabled"}`}>
       <div className="card-head">

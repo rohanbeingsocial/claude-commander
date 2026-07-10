@@ -10,6 +10,7 @@ mod misc;
 mod models;
 mod orchestration;
 mod platform;
+mod pools;
 mod projects;
 mod pty;
 mod state;
@@ -46,6 +47,17 @@ fn main() {
             // local MCP server: lets an orchestrator instance delegate through Commander
             mcp::start(app.handle().clone());
 
+            // pool pump/medic: watches each running pool's board, nudges members when it
+            // changes, and relaunches limit-stuck members when their window resets
+            let pool_handle = app.handle().clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_secs(8));
+                loop {
+                    pools::pool_tick(&pool_handle);
+                    std::thread::sleep(Duration::from_secs(10));
+                }
+            });
+
             // background usage scanner: incremental JSONL parse + push snapshot to UI
             let handle = app.handle().clone();
             std::thread::spawn(move || {
@@ -56,7 +68,7 @@ fn main() {
                         let state = handle.state::<AppState>();
                         let accounts: Vec<(i64, String)> = {
                             let conn = state.db.lock().unwrap();
-                            let list = match conn.prepare("SELECT id, config_dir FROM accounts WHERE enabled=1") {
+                            let list = match conn.prepare("SELECT id, config_dir FROM accounts WHERE enabled=1 AND engine='claude'") {
                                 Ok(mut stmt) => stmt
                                     .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
                                     .map(|rows| rows.flatten().collect())
@@ -101,6 +113,7 @@ fn main() {
             accounts::update_account,
             accounts::add_account,
             accounts::create_account,
+            accounts::add_engine_account,
             accounts::remove_account,
             accounts::rescan_usage,
             projects::list_projects,
@@ -130,6 +143,13 @@ fn main() {
             orchestration::reassign_worker,
             orchestration::set_operator,
             orchestration::worker_activity_log,
+            pools::create_pool,
+            pools::list_pools,
+            pools::start_pool,
+            pools::stop_pool,
+            pools::delete_pool,
+            pools::pool_board,
+            pools::nudge_pool_member,
             mcp::mcp_status,
             tasks::list_tasks,
             tasks::add_task,

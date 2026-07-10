@@ -56,7 +56,8 @@ fn write_settings(config_dir: &str, v: &Value) -> Result<(), String> {
 
 fn config_dirs(state: &State<'_, AppState>) -> Vec<String> {
     let conn = state.db.lock().unwrap();
-    conn.prepare("SELECT config_dir FROM accounts")
+    // the status-line tap is a Claude Code settings.json hook — claude accounts only
+    conn.prepare("SELECT config_dir FROM accounts WHERE engine='claude'")
         .and_then(|mut s| s.query_map([], |r| r.get::<_, String>(0)).map(|rows| rows.flatten().collect()))
         .unwrap_or_default()
 }
