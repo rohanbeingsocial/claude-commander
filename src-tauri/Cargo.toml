@@ -4,6 +4,12 @@ version = "0.4.0"
 edition = "2021"
 description = "Multi-account command center for Claude Code"
 
+[features]
+# Serve the embedded frontend instead of devUrl. `tauri build` turns this on itself;
+# a direct `cargo build --release` MUST pass `--features custom-protocol` or the exe
+# tries to load the vite dev server and shows "can't reach this page".
+custom-protocol = ["tauri/custom-protocol"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
