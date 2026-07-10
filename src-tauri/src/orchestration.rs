@@ -62,7 +62,7 @@ fn get_worker(conn: &Connection, id: i64) -> Result<WorkerTask, String> {
 }
 
 /// Filesystem-safe slug, matching the convention used by the task board.
-fn slugify(text: &str) -> String {
+pub(crate) fn slugify(text: &str) -> String {
     let mut s: String = text
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
@@ -329,16 +329,16 @@ fn push_activity(app: &AppHandle, worker_id: i64, (kind, detail): (String, Strin
 /// the DB, notify the UI, then apply the limit-hit policy (pause-and-ask by default).
 fn finalize(app: &AppHandle, worker_id: i64, code: i64, stdout_tail: &str, stderr_text: &str) {
     let state = app.state::<AppState>();
-    let row: Option<(String, String, i64, String, String, String)> = {
+    let row: Option<(String, String, i64, String, String, String, String)> = {
         let conn = state.db.lock().unwrap();
         conn.query_row(
-            "SELECT w.cwd, a.config_dir, w.account_id, a.name, w.folder, w.engine FROM worker_tasks w JOIN accounts a ON a.id=w.account_id WHERE w.id=?1",
+            "SELECT w.cwd, a.config_dir, w.account_id, a.name, w.folder, w.engine, w.status FROM worker_tasks w JOIN accounts a ON a.id=w.account_id WHERE w.id=?1",
             [worker_id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)),
         )
         .ok()
     };
-    let Some((cwd, cfg, account_id, account_name, folder, engine)) = row else { return };
+    let Some((cwd, cfg, account_id, account_name, folder, engine, prior_status)) = row else { return };
     let is_claude = engine == "claude";
 
     let combined = format!("{stdout_tail}\n{stderr_text}");
@@ -350,7 +350,10 @@ fn finalize(app: &AppHandle, worker_id: i64, code: i64, stdout_tail: &str, stder
     } else {
         None
     };
-    let status = if limit.is_some() {
+    // a worker someone explicitly stopped stays "stopped" — its kill exit code isn't a failure
+    let status = if prior_status == "stopped" {
+        "stopped"
+    } else if limit.is_some() {
         "paused_at_limit"
     } else if code == 0 {
         "done"
@@ -394,6 +397,12 @@ fn finalize(app: &AppHandle, worker_id: i64, code: i64, stdout_tail: &str, stder
         }
     }
 
+    // Autopilot workers (spawned by an assignment) get the pipeline's policy — advance the
+    // phase, auto-reassign on limit — instead of the generic pause-and-ask below.
+    if crate::pipeline::on_worker_finalized(app, worker_id, status) {
+        return;
+    }
+
     match status {
         "done" => emit_toast(app, "success", &format!("Worker “{account_name}” finished")),
         "failed" => emit_toast(app, "error", &format!("Worker “{account_name}” failed (exit {code})")),
@@ -418,7 +427,7 @@ fn finalize(app: &AppHandle, worker_id: i64, code: i64, stdout_tail: &str, stder
     }
 }
 
-fn emit_toast(app: &AppHandle, level: &str, message: &str) {
+pub(crate) fn emit_toast(app: &AppHandle, level: &str, message: &str) {
     let _ = app.emit(
         "toast",
         crate::models::ToastMsg { level: level.to_string(), message: message.to_string() },
@@ -505,7 +514,7 @@ fn distill_progress(stream_path: &Path) -> String {
 }
 
 /// The `progress.md` seed we write so a fresh checkpoint is obviously distinguishable.
-const PROGRESS_SEED: &str = "# Worker progress\n\n_Not started yet. The worker updates this file as it works._\n";
+pub(crate) const PROGRESS_SEED: &str = "# Worker progress\n\n_Not started yet. The worker updates this file as it works._\n";
 
 fn build_context(cwd: &str, orch_label: &str, refs: &[String]) -> String {
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M").to_string();
@@ -542,7 +551,7 @@ fn build_context(cwd: &str, orch_label: &str, refs: &[String]) -> String {
 
 /// Core delegation: create the worker folder + files and launch the headless worker.
 #[allow(clippy::too_many_arguments)]
-fn delegate_core(
+pub(crate) fn delegate_core(
     app: &AppHandle,
     orchestrator_instance_id: Option<i64>,
     account_id: i64,
@@ -551,6 +560,7 @@ fn delegate_core(
     model: Option<String>,
     extra_args: Option<&str>,
     context_refs: &[String],
+    assignment_id: Option<i64>,
 ) -> Result<WorkerTask, String> {
     let state = app.state::<AppState>();
     if !Path::new(cwd).is_dir() {
@@ -614,9 +624,9 @@ fn delegate_core(
     let worker_id: i64 = {
         let conn = state.db.lock().unwrap();
         conn.execute(
-            "INSERT INTO worker_tasks(orchestrator_instance_id, account_id, model, prompt, cwd, folder, status, engine) \
-             VALUES(?1,?2,?3,?4,?5,'','running',?6)",
-            params![orchestrator_instance_id, account_id, model, task_prompt, cwd, engine],
+            "INSERT INTO worker_tasks(orchestrator_instance_id, account_id, model, prompt, cwd, folder, status, engine, assignment_id) \
+             VALUES(?1,?2,?3,?4,?5,'','running',?6,?7)",
+            params![orchestrator_instance_id, account_id, model, task_prompt, cwd, engine, assignment_id],
         )
         .map_err(|e| e.to_string())?;
         conn.last_insert_rowid()
@@ -669,7 +679,7 @@ fn delegate_core(
 
 /// Pick the best worker account for (re)assignment: prefer the orchestrator's pool, choose
 /// the account with the most real headroom (lowest live 5-hour %), never the excluded one.
-fn pick_pool_account(app: &AppHandle, orchestrator_instance_id: Option<i64>, exclude: i64) -> Result<i64, String> {
+pub(crate) fn pick_pool_account(app: &AppHandle, orchestrator_instance_id: Option<i64>, exclude: i64) -> Result<i64, String> {
     let state = app.state::<AppState>();
     let conn = state.db.lock().unwrap();
     let pool: Vec<i64> = orchestrator_instance_id
@@ -735,8 +745,9 @@ fn reassign_core(app: &AppHandle, worker_id: i64, target: Option<i64>) -> Result
          first, confirm what is already done (including on-disk changes), and finish the remaining work.\n\n\
          Original task:\n{prompt}"
     );
-    // None = the target account's engine-appropriate default args
-    let nw = delegate_core(app, orch_id, target_account, &cwd, &cont_prompt, model, None, &refs)?;
+    // None = the target account's engine-appropriate default args; a reassigned pipeline
+    // worker is re-linked to its assignment by pipeline.rs, not here
+    let nw = delegate_core(app, orch_id, target_account, &cwd, &cont_prompt, model, None, &refs, None)?;
     {
         let conn = state.db.lock().unwrap();
         let _ = conn.execute("UPDATE worker_tasks SET reassigned_to=?1 WHERE id=?2", params![nw.id, worker_id]);
@@ -745,7 +756,7 @@ fn reassign_core(app: &AppHandle, worker_id: i64, target: Option<i64>) -> Result
 }
 
 /// Best-effort relative path of `target` under `base` using forward slashes.
-fn pathdiff_rel(base: &str, target: &Path) -> Option<String> {
+pub(crate) fn pathdiff_rel(base: &str, target: &Path) -> Option<String> {
     let t = target.to_string_lossy().replace('\\', "/");
     let b = Path::new(base).to_string_lossy().replace('\\', "/");
     let b = b.trim_end_matches('/');
@@ -776,6 +787,7 @@ pub fn delegate_worker(
         model,
         extra_args.as_deref(),
         &context_refs.unwrap_or_default(),
+        None,
     )
 }
 
@@ -956,6 +968,11 @@ pub fn account_usage(app: &AppHandle, account_id: i64) -> Result<WorkerUsage, St
 /// Stop a running worker (kills its process tree). Marks it "stopped".
 #[tauri::command]
 pub fn stop_worker(state: State<'_, AppState>, worker_id: i64) -> Result<(), String> {
+    stop_core(&state, worker_id)
+}
+
+/// Core of `stop_worker`, reused by the autopilot pipeline when an assignment is stopped.
+pub(crate) fn stop_core(state: &State<'_, AppState>, worker_id: i64) -> Result<(), String> {
     let pid: Option<i64> = {
         let conn = state.db.lock().unwrap();
         conn.query_row("SELECT pid FROM worker_tasks WHERE id=?1", [worker_id], |r| r.get::<_, Option<i64>>(0))
@@ -1052,7 +1069,7 @@ fn pool_ids(conn: &Connection, orch_id: i64) -> Vec<i64> {
 
 /// The working directory the orchestrator instance was launched in — the default cwd for
 /// workers it delegates when it doesn't name one explicitly.
-fn orchestrator_cwd(app: &AppHandle, orch_id: i64) -> Result<String, String> {
+pub(crate) fn orchestrator_cwd(app: &AppHandle, orch_id: i64) -> Result<String, String> {
     let state = app.state::<AppState>();
     let conn = state.db.lock().unwrap();
     conn.query_row("SELECT cwd FROM instances WHERE id=?1", [orch_id], |r| r.get::<_, String>(0))
@@ -1140,7 +1157,8 @@ pub fn delegate_from_orchestrator(
         Some(a) => a,
         None => pick_pool_account(app, Some(orch_id), -1)?,
     };
-    delegate_core(app, Some(orch_id), account_id, &cwd, &prompt, model, None, &refs)
+    // None = the target account's engine-appropriate default args
+    delegate_core(app, Some(orch_id), account_id, &cwd, &prompt, model, None, &refs, None)
 }
 
 /// Adopt orphaned workers: re-parent workers (same cwd) whose orchestrator instance is dead

@@ -9,6 +9,7 @@ mod mcp;
 mod misc;
 mod models;
 mod orchestration;
+mod pipeline;
 mod platform;
 mod pools;
 mod projects;
@@ -102,6 +103,8 @@ fn main() {
                     // warm-up on start / keep 5-hour windows open (opt-in settings)
                     warmup::auto_tick(&handle, first_tick);
                     first_tick = false;
+                    // autopilot heartbeat: restart waiting assignments, recover crashed ones
+                    pipeline::tick(&handle);
                     std::thread::sleep(Duration::from_secs(interval));
                 }
             });
@@ -150,6 +153,10 @@ fn main() {
             pools::delete_pool,
             pools::pool_board,
             pools::nudge_pool_member,
+            pipeline::create_assignment,
+            pipeline::list_assignments,
+            pipeline::stop_assignment,
+            pipeline::assignment_plan,
             mcp::mcp_status,
             tasks::list_tasks,
             tasks::add_task,

@@ -343,6 +343,8 @@ pub fn boot(conn: &Connection) {
         ("pool_args_codex", ""),
         // one shared .project-memory/memory per folder, used by every account (signed entries)
         ("shared_project_memory", "1"),
+        // every autopilot worker runs on this model (see pipeline.rs)
+        ("assignment_model", crate::pipeline::DEFAULT_MODEL),
     ] {
         let _ = conn.execute("INSERT OR IGNORE INTO settings(key,value) VALUES(?1,?2)", params![k, v]);
     }

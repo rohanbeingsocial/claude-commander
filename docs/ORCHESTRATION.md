@@ -16,6 +16,7 @@ in [DESIGN.md](./DESIGN.md); read that first.
 | Orchestrator flag + worker pool stored on launch; `auto_reassign` toggle in Settings | **Done** |
 | Workers console UI (delegate, monitor, view report, stop, reassign, check real usage) | **Done** (`src/views/WorkersView.tsx`) |
 | **MCP server** so the orchestrator Claude drives delegation itself + `--disallowedTools Task` wiring | **Done** (`src-tauri/src/mcp.rs`) |
+| **Autopilot assignments** — managed plan→implement pipeline: auto account pick, auto-advance, always-auto-reassign on limit, enforced model (Fable) | **Done** (`src-tauri/src/pipeline.rs`, §11) |
 
 Delegation can be driven two ways, both against the same engine:
 
@@ -290,3 +291,44 @@ Workers inherit the orchestrator's memory without ingesting its raw transcript:
   only, require a token, and never expose it beyond the orchestrator instance.
 - **Cost accounting** — record which account/model executed each subtask so you can see
   where a run's usage actually went.
+
+## 11. Autopilot assignments — the managed layer on top
+
+Everything above is *manual-loop* orchestration: the operator Claude (or you) delegates,
+polls, decides on limit hits. The **autopilot** (`src-tauri/src/pipeline.rs`) is one layer
+above that: hand it a whole task and it drives the entire lifecycle unattended.
+
+```
+assign_task("add rate-limit headers")            ← operator MCP tool / Workers-tab form
+      │
+      ▼
+pick pool account with most live headroom
+      │
+      ▼
+PHASE 1 — PLAN      worker writes plan.md (no code changes)     ── limit? ──► auto-reassign
+      │  done                                                        remainder (plan +
+      ▼                                                              progress + diff) to the
+PHASE 2 — IMPLEMENT worker follows plan.md, re-picked account   ── limit? ──► next-best account
+      │  done
+      ▼
+assignment done  (status running | waiting | done | failed | stopped)
+```
+
+Key properties:
+
+- **Two tracked phases.** Phase 1 produces `plan.md` in the assignment folder
+  (`.commander-tasks/a<id>-<slug>/`) — planning only, no code. Phase 2 implements per that
+  plan. Progress within a phase is the normal worker machinery (`progress.md` + distill).
+- **Enforced model.** Every managed worker launches with `--model` from the
+  `assignment_model` setting — **`claude-fable-5` by default** — regardless of what the
+  operator asks for.
+- **Limit policy is always auto-reassign** (the §5.3 pause-and-ask default does not apply
+  to managed workers): the interrupted phase's remainder moves to the best remaining
+  account with the prior checkpoint as context, up to a hop ceiling. When *no* account has
+  capacity the assignment parks as `waiting` with a `retry_after` (the account's reset
+  time when known) and the background tick restarts it. The tick also recovers assignments
+  whose worker died with a previous Commander process.
+- **Two surfaces, one engine.** Operator Claudes get MCP tools `assign_task` /
+  `assignments_status` / `stop_assignment` (scoped to their own assignments); humans get
+  the Autopilot section of the Workers tab (assign, watch phase badges, read the plan,
+  stop). Both drive the same `pipeline.rs` core.

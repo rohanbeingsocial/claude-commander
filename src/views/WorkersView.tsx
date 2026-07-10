@@ -3,7 +3,7 @@ import { open } from "../dialog";
 import { ipc } from "../ipc";
 import { useStore } from "../store";
 import { ENGINE_ICON, MODEL_SUGGESTIONS } from "../util";
-import type { ClosureReport, McpStatus, WorkerActivity, WorkerTask, WorkerUsage } from "../types";
+import type { Assignment, ClosureReport, McpStatus, WorkerActivity, WorkerTask, WorkerUsage } from "../types";
 
 /** Icon per live-activity kind (see WorkerActivity). */
 const ACT_ICON: Record<string, string> = {
@@ -24,6 +24,15 @@ const STATUS_ICON: Record<string, string> = {
 
 function statusLabel(s: string): string {
   return s === "paused_at_limit" ? "paused (limit)" : s;
+}
+
+/** One badge for an assignment's phase+status combination. */
+function assignmentBadge(a: Assignment): string {
+  if (a.status === "running") return a.phase === "plan" ? "📝 planning" : "🛠 implementing";
+  if (a.status === "waiting") return "⏸ waiting";
+  if (a.status === "done") return "✅ done";
+  if (a.status === "failed") return "✖ failed";
+  return "⏹ stopped";
 }
 
 function fmtTime(iso: string | null): string {
@@ -52,12 +61,21 @@ export default function WorkersView() {
   const [mcp, setMcp] = useState<McpStatus | null>(null);
   const [feedWorkerId, setFeedWorkerId] = useState<number | null>(null);
 
+  // autopilot
+  const [assignments, setAssignments] = useState<Assignment[]>([]);
+  const [autoCwd, setAutoCwd] = useState("");
+  const [autoPrompt, setAutoPrompt] = useState("");
+  const [autoBusy, setAutoBusy] = useState(false);
+  const [plan, setPlan] = useState<{ title: string; text: string } | null>(null);
+
   useEffect(() => {
     refreshWorkers();
     ipc.mcpStatus().then(setMcp).catch(() => setMcp(null));
+    ipc.listAssignments().then(setAssignments).catch(() => {});
     const t = setInterval(() => {
       refreshWorkers();
       ipc.mcpStatus().then(setMcp).catch(() => {});
+      ipc.listAssignments().then(setAssignments).catch(() => {});
     }, 5000);
     return () => clearInterval(t);
   }, [refreshWorkers]);
@@ -79,8 +97,43 @@ export default function WorkersView() {
   useEffect(() => {
     if (accountId == null && accounts.length) setAccountId(accounts.find((a) => a.enabled)?.id ?? null);
     if (!cwd && projects.length) setCwd(projects[0].rootPath);
+    if (!autoCwd && projects.length) setAutoCwd(projects[0].rootPath);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accounts, projects]);
+
+  const assign = async () => {
+    if (!autoCwd) return toast("error", "Pick a working directory");
+    if (!autoPrompt.trim()) return toast("error", "Enter a task");
+    setAutoBusy(true);
+    try {
+      const a = await ipc.createAssignment({ cwd: autoCwd, prompt: autoPrompt.trim() });
+      setAutoPrompt("");
+      setAssignments(await ipc.listAssignments());
+      toast("success", `Autopilot took “${a.title}”${a.currentAccount ? ` — planning on ${a.currentAccount}` : ""}`);
+    } catch (e) {
+      toast("error", String(e));
+    } finally {
+      setAutoBusy(false);
+    }
+  };
+
+  const stopAssignment = async (id: number) => {
+    try {
+      await ipc.stopAssignment(id);
+      setAssignments(await ipc.listAssignments());
+    } catch (e) {
+      toast("error", String(e));
+    }
+  };
+
+  const viewPlan = async (a: Assignment) => {
+    try {
+      const text = await ipc.assignmentPlan(a.id);
+      setPlan({ title: a.title, text: text.trim() || "— no plan yet — the planning phase hasn't delivered it —" });
+    } catch (e) {
+      toast("error", String(e));
+    }
+  };
 
   const pickFolder = async () => {
     const dir = await open({ directory: true, title: "Working directory for the worker" });
@@ -165,6 +218,50 @@ export default function WorkersView() {
           <>
             <span className="status-dot st-limit_hit" /> MCP server not running — delegation is available by hand below.
           </>
+        )}
+      </div>
+
+      <div className="card settings-card">
+        <h3>Autopilot</h3>
+        <div className="dim small">
+          Hand a task to the layer and it does the rest: picks the account with the most headroom, runs an
+          implementation-plan phase, then implements per the plan — on Fable — and auto-reassigns whenever an account
+          hits its limit. Orchestrator Claudes can do the same via the <code>assign_task</code> MCP tool.
+        </div>
+        <div className="row" style={{ marginTop: 6 }}>
+          <select value={autoCwd} onChange={(e) => setAutoCwd(e.target.value)} style={{ flex: 1 }}>
+            <option value="">— working directory —</option>
+            {projects.map((p) => (
+              <option key={p.id} value={p.rootPath}>
+                {p.name} — {p.rootPath}
+              </option>
+            ))}
+            {autoCwd && !projects.some((p) => p.rootPath === autoCwd) && <option value={autoCwd}>{autoCwd}</option>}
+          </select>
+        </div>
+        <textarea
+          rows={3}
+          placeholder="Describe the task. Autopilot plans it first (plan.md), then implements it, reassigning across accounts as needed."
+          value={autoPrompt}
+          onChange={(e) => setAutoPrompt(e.target.value)}
+          style={{ marginTop: 6 }}
+        />
+        <div className="row" style={{ marginTop: 6 }}>
+          <button className="btn btn-primary btn-sm" onClick={assign} disabled={autoBusy}>
+            {autoBusy ? "Assigning…" : "Assign to autopilot"}
+          </button>
+        </div>
+        {assignments.length > 0 && (
+          <div style={{ marginTop: 8 }}>
+            {assignments.map((a) => (
+              <AssignmentRow
+                key={a.id}
+                a={a}
+                onPlan={() => viewPlan(a)}
+                onStop={() => stopAssignment(a.id)}
+              />
+            ))}
+          </div>
         )}
       </div>
 
@@ -283,6 +380,7 @@ export default function WorkersView() {
 
       {report && <ReportModal report={report} onClose={() => setReport(null)} />}
       {feedWorkerId != null && <ActivityFeedModal workerId={feedWorkerId} onClose={() => setFeedWorkerId(null)} />}
+      {plan && <PlanModal title={plan.title} text={plan.text} onClose={() => setPlan(null)} />}
     </div>
   );
 }
@@ -299,6 +397,36 @@ function LiveActivityLine({ workerId, running }: { workerId: number; running: bo
       {running && <span className="live-dot" />}
       <span className="dim">{ACT_ICON[last.kind] ?? "•"}</span>{" "}
       <span className="ellipsis">{last.detail}</span>
+    </div>
+  );
+}
+
+function AssignmentRow({ a, onPlan, onStop }: { a: Assignment; onPlan: () => void; onStop: () => void }) {
+  const active = a.status === "running" || a.status === "waiting";
+  return (
+    <div className="card acct-edit-row">
+      <div className="row wrap" style={{ justifyContent: "space-between" }}>
+        <span>
+          {assignmentBadge(a)} · <strong>{a.title}</strong>
+          {a.currentAccount ? ` · ${a.currentAccount}` : ""}
+          {a.hops > 0 ? ` · ${a.hops} reassignment${a.hops === 1 ? "" : "s"}` : ""}
+        </span>
+        <span className="row">
+          <button className="btn btn-sm btn-ghost" onClick={onPlan}>
+            Plan
+          </button>
+          {active && (
+            <button className="btn btn-sm btn-ghost" onClick={onStop}>
+              Stop
+            </button>
+          )}
+        </span>
+      </div>
+      <div className="dim small">
+        {a.model} · {fmtTime(a.createdAt)}
+        {a.status === "waiting" && a.retryAfter ? ` · retries ${fmtTime(a.retryAfter)}` : ""}
+        {a.lastError ? ` · ${a.lastError}` : ""}
+      </div>
     </div>
   );
 }
@@ -346,6 +474,27 @@ function ActivityFeedModal({ workerId, onClose }: { workerId: number; onClose: (
           ))}
           <div ref={endRef} />
         </div>
+        <div className="modal-actions">
+          <button className="btn" onClick={onClose}>
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PlanModal({ title, text, onClose }: { title: string; text: string; onClose: () => void }) {
+  return (
+    <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="modal">
+        <div className="modal-head">
+          <h2>Plan — {title}</h2>
+          <button className="btn btn-ghost btn-sm" onClick={onClose}>
+            ✕
+          </button>
+        </div>
+        <pre className="report-pre">{text}</pre>
         <div className="modal-actions">
           <button className="btn" onClick={onClose}>
             Close
