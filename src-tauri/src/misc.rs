@@ -64,6 +64,18 @@ pub fn resolve_claude(conn: &Connection) -> String {
     platform::find_claude()
 }
 
+/// Resolve an alternative engine CLI (gemini / codex): explicit setting first
+/// (`gemini_path` / `codex_path`), then a PATH / well-known-dirs search.
+pub fn resolve_engine(conn: &Connection, engine: &str) -> String {
+    let key = format!("{engine}_path");
+    if let Some(p) = db::get_setting(conn, &key) {
+        if !p.is_empty() && Path::new(&p).exists() {
+            return p;
+        }
+    }
+    platform::find_program(engine)
+}
+
 #[tauri::command]
 pub fn get_settings(state: State<'_, AppState>) -> Result<HashMap<String, String>, String> {
     let conn = state.db.lock().unwrap();
@@ -73,12 +85,17 @@ pub fn get_settings(state: State<'_, AppState>) -> Result<HashMap<String, String
         .map_err(|e| e.to_string())?;
     let mut map: HashMap<String, String> = rows.flatten().collect();
     map.insert("claude_path_resolved".into(), state.claude_path.lock().unwrap().clone());
+    map.insert("gemini_path_resolved".into(), resolve_engine(&conn, "gemini"));
+    map.insert("codex_path_resolved".into(), resolve_engine(&conn, "codex"));
     Ok(map)
 }
 
 #[tauri::command]
 pub fn set_setting(state: State<'_, AppState>, key: String, value: String) -> Result<(), String> {
-    if key == "claude_path" && !value.is_empty() && !Path::new(&value).exists() {
+    if matches!(key.as_str(), "claude_path" | "gemini_path" | "codex_path")
+        && !value.is_empty()
+        && !Path::new(&value).exists()
+    {
         return Err("That path does not exist".into());
     }
     {

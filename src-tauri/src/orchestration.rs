@@ -158,6 +158,11 @@ fn spawn_and_monitor(
                 if let Some(f) = file.as_mut() {
                     let _ = writeln!(f, "{line}");
                 }
+                // live visibility: surface what the worker is doing right now (costs no
+                // tokens — we're only rendering the stream the worker already produces)
+                for act in parse_activity(&line) {
+                    push_activity(&app, worker_id, act);
+                }
                 tail.push_str(&line);
                 tail.push('\n');
                 if tail.len() > 16384 {
@@ -177,6 +182,92 @@ fn spawn_and_monitor(
         finalize(&app, worker_id, code, &tail, &stderr_text);
     });
     Ok(pid)
+}
+
+/// Turn one stream-json line into displayable activity items (usually 0 or 1; an assistant
+/// message with several tool calls yields several).
+fn parse_activity(line: &str) -> Vec<(String, String)> {
+    let Ok(v) = serde_json::from_str::<Value>(line) else { return Vec::new() };
+    let mut out: Vec<(String, String)> = Vec::new();
+    match v.get("type").and_then(|t| t.as_str()) {
+        Some("system") => {
+            if v.get("subtype").and_then(|s| s.as_str()) == Some("init") {
+                let model = v.get("model").and_then(|m| m.as_str()).unwrap_or("");
+                out.push(("start".into(), format!("session started{}", if model.is_empty() { String::new() } else { format!(" ({model})") })));
+            }
+        }
+        Some("assistant") => {
+            if let Some(Value::Array(items)) = v.get("message").and_then(|m| m.get("content")) {
+                for i in items {
+                    match i.get("type").and_then(|t| t.as_str()) {
+                        Some("text") => {
+                            if let Some(t) = i.get("text").and_then(|t| t.as_str()) {
+                                let t = t.trim();
+                                if !t.is_empty() {
+                                    out.push(("text".into(), crate::handover::truncate_chars(t, 220)));
+                                }
+                            }
+                        }
+                        Some("tool_use") => {
+                            let name = i.get("name").and_then(|n| n.as_str()).unwrap_or("tool");
+                            let input = i.get("input");
+                            // the most human-readable argument a tool tends to have
+                            let arg = input
+                                .and_then(|inp| {
+                                    inp.get("file_path")
+                                        .or_else(|| inp.get("notebook_path"))
+                                        .or_else(|| inp.get("command"))
+                                        .or_else(|| inp.get("pattern"))
+                                        .or_else(|| inp.get("path"))
+                                        .or_else(|| inp.get("url"))
+                                        .or_else(|| inp.get("description"))
+                                })
+                                .and_then(|a| a.as_str())
+                                .unwrap_or("");
+                            let detail = if arg.is_empty() {
+                                name.to_string()
+                            } else {
+                                format!("{name} — {}", crate::handover::truncate_chars(arg, 160))
+                            };
+                            out.push(("tool".into(), detail));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        Some("result") => {
+            let detail = v
+                .get("result")
+                .and_then(|r| r.as_str())
+                .map(|r| crate::handover::truncate_chars(r.trim(), 220))
+                .unwrap_or_else(|| "finished".into());
+            out.push(("result".into(), detail));
+        }
+        _ => {}
+    }
+    out
+}
+
+/// Record one activity item in the per-worker ring and push it to the UI.
+fn push_activity(app: &AppHandle, worker_id: i64, (kind, detail): (String, String)) {
+    let act = crate::models::WorkerActivity {
+        worker_id,
+        ts: db::now_str(),
+        kind,
+        detail,
+    };
+    {
+        let state = app.state::<AppState>();
+        let mut map = state.worker_activity.lock().unwrap();
+        let ring = map.entry(worker_id).or_default();
+        ring.push(act.clone());
+        if ring.len() > 40 {
+            let n = ring.len() - 40;
+            ring.drain(..n);
+        }
+    }
+    let _ = app.emit("worker-activity", act);
 }
 
 /// Runs when a worker process exits: classify the outcome, snapshot the closure info into
@@ -222,6 +313,7 @@ fn finalize(app: &AppHandle, worker_id: i64, code: i64, stdout_tail: &str, stder
         }
     }
 
+    push_activity(app, worker_id, ("status".into(), format!("{status} (exit {code})")));
     if let Ok(w) = { let conn = state.db.lock().unwrap(); get_worker(&conn, worker_id) } {
         let _ = app.emit("workers-updated", w);
     }
@@ -606,6 +698,72 @@ pub fn delegate_worker(
         &extra,
         &context_refs.unwrap_or_default(),
     )
+}
+
+/// Recent live activity for every worker seen this app run (in-memory rings, oldest
+/// first). The UI groups by worker_id; live updates arrive as `worker-activity` events.
+#[tauri::command]
+pub fn worker_activity_log(state: State<'_, AppState>) -> Result<Vec<crate::models::WorkerActivity>, String> {
+    let map = state.worker_activity.lock().unwrap();
+    let mut all: Vec<crate::models::WorkerActivity> = map.values().flatten().cloned().collect();
+    all.sort_by(|a, b| a.ts.cmp(&b.ts));
+    Ok(all)
+}
+
+/// Auto-wake paused workers: when `auto_wake_workers` is on, a worker parked at its usage
+/// limit resumes on the SAME account as soon as its window resets. Reuses the reassign
+/// path, so the new worker gets the prior progress + result and continues instead of
+/// restarting. Runs from the background scanner loop.
+pub fn auto_wake_workers_tick(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let rows: Vec<(i64, i64, Option<String>)> = {
+        let conn = state.db.lock().unwrap();
+        if db::get_setting(&conn, "auto_wake_workers").as_deref() != Some("1") {
+            return;
+        }
+        conn.prepare(
+            "SELECT id, account_id, frees_at FROM worker_tasks WHERE status='paused_at_limit' AND reassigned_to IS NULL",
+        )
+        .and_then(|mut s| {
+            s.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+                .map(|rows| rows.flatten().collect())
+        })
+        .unwrap_or_default()
+    };
+    for (worker_id, account_id, frees_at) in rows {
+        // trust the recorded reset time when we have one; otherwise ask the account
+        if let Some(t) = frees_at.as_deref().and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok()) {
+            if t.with_timezone(&chrono::Utc) > chrono::Utc::now() {
+                continue;
+            }
+        } else {
+            let usable = {
+                let conn = state.db.lock().unwrap();
+                crate::accounts::get(&conn, account_id)
+                    .and_then(|a| usage::account_usage(&conn, &a, 0))
+                    .map(|u| !matches!(u.status.as_str(), "limit_5h" | "limit_weekly" | "disabled"))
+                    .unwrap_or(false)
+            };
+            if !usable {
+                continue;
+            }
+        }
+        match reassign_core(app, worker_id, Some(account_id)) {
+            Ok(nw) => emit_toast(
+                app,
+                "success",
+                &format!("Auto-wake: worker #{worker_id} limit reset — resumed on “{}” as #{}", nw.account_name, nw.id),
+            ),
+            Err(e) => {
+                // park it so a broken relaunch doesn't retry (and toast) every tick
+                {
+                    let conn = state.db.lock().unwrap();
+                    let _ = conn.execute("UPDATE worker_tasks SET status='failed' WHERE id=?1", [worker_id]);
+                }
+                emit_toast(app, "error", &format!("Auto-wake of worker #{worker_id} failed: {e}"));
+            }
+        }
+    }
 }
 
 /// List workers, most recent first. Optionally scope to one orchestrator instance.

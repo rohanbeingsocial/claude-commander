@@ -184,6 +184,20 @@ pub struct HandoverRow {
     pub created_at: String,
 }
 
+/// One live-activity item parsed from a headless worker's stream-json output — what the
+/// worker is doing RIGHT NOW (tool calls, text snippets, final result). Streamed to the UI
+/// as `worker-activity` events and kept in a small in-memory ring per worker. Display-only:
+/// the worker spends the same tokens whether or not anyone is watching.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkerActivity {
+    pub worker_id: i64,
+    pub ts: String,
+    /// "start" | "text" | "tool" | "result" | "status"
+    pub kind: String,
+    pub detail: String,
+}
+
 // ---- events ----
 
 #[derive(Clone, Serialize)]

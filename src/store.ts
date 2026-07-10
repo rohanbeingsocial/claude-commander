@@ -9,6 +9,7 @@ import type {
   SidebarMode,
   Task,
   View,
+  WorkerActivity,
   WorkerTask,
 } from "./types";
 
@@ -17,7 +18,7 @@ export interface LaunchPreset {
   projectId?: number;
   cwd?: string;
   mode?: string;
-  /** "claude" (default) or "shell" — plain PowerShell terminal. */
+  /** "claude" (default) | "shell" | "gemini" | "codex". */
   kind?: string;
 }
 
@@ -67,6 +68,11 @@ interface AppStore {
   tasks: Task[];
   handovers: HandoverRow[];
   workers: WorkerTask[];
+  /** Live activity per worker id (oldest first, small ring) — what each headless worker
+   *  is doing right now. Display-only; costs no tokens. */
+  workerActivity: Record<number, WorkerActivity[]>;
+  appendWorkerActivity: (a: WorkerActivity) => void;
+  refreshWorkerActivity: () => Promise<void>;
   settings: Record<string, string>;
 
   activeInstanceId: number | null;
@@ -142,6 +148,22 @@ export const useStore = create<AppStore>((set, get) => ({
   tasks: [],
   handovers: [],
   workers: [],
+  workerActivity: {},
+  appendWorkerActivity: (a) => {
+    const cur = get().workerActivity;
+    const ring = [...(cur[a.workerId] ?? []), a].slice(-40);
+    set({ workerActivity: { ...cur, [a.workerId]: ring } });
+  },
+  refreshWorkerActivity: async () => {
+    try {
+      const all = await ipc.workerActivityLog();
+      const map: Record<number, typeof all> = {};
+      for (const a of all) (map[a.workerId] ??= []).push(a);
+      set({ workerActivity: map });
+    } catch {
+      /* non-critical */
+    }
+  },
   settings: {},
 
   activeInstanceId: null,

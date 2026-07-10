@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Claude Commander",
-  "version": "0.2.0",
-  "identifier": "com.rohan.claudecommander",
+  "productName": "Claude Commander Dev",
+  "version": "0.3.0",
+  "identifier": "com.rohan.claudecommander.dev",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:5173",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Claude Commander",
+        "title": "Claude Commander (DEV)",
         "width": 1400,
         "height": 880,
         "minWidth": 1060,

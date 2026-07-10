@@ -182,6 +182,68 @@ pub fn open_external_terminal(claude: &str, config_dir: &str, cwd: &str) -> Resu
     }
 }
 
+/// Locate an arbitrary CLI (e.g. `gemini`, `codex`) when no explicit path is configured.
+/// Same strategy as find_claude: common install dirs first (a GUI app's PATH is minimal),
+/// then where.exe / which. Returns "" when nothing is found.
+pub fn find_program(name: &str) -> String {
+    if let Some(home) = dirs::home_dir() {
+        #[cfg(windows)]
+        let candidates = vec![
+            home.join(".local").join("bin").join(format!("{name}.exe")),
+            home.join("AppData").join("Roaming").join("npm").join(format!("{name}.cmd")),
+        ];
+        #[cfg(not(windows))]
+        let candidates = vec![
+            home.join(".local").join("bin").join(name),
+            std::path::PathBuf::from("/opt/homebrew/bin").join(name),
+            std::path::PathBuf::from("/usr/local/bin").join(name),
+        ];
+        for c in candidates {
+            if c.exists() {
+                return c.to_string_lossy().to_string();
+            }
+        }
+    }
+    #[cfg(windows)]
+    {
+        let mut cmd = Command::new("where.exe");
+        cmd.arg(name);
+        quiet(&mut cmd);
+        if let Ok(out) = cmd.output() {
+            if out.status.success() {
+                let s = String::from_utf8_lossy(&out.stdout);
+                let lines: Vec<&str> = s.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+                if let Some(exe) = lines.iter().find(|l| l.to_lowercase().ends_with(".exe")) {
+                    return exe.to_string();
+                }
+                if let Some(first) = lines.first() {
+                    return first.to_string();
+                }
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        for (prog, args) in [
+            ("which", vec![name.to_string()]),
+            ("sh", vec!["-lc".to_string(), format!("which {name}")]),
+        ] {
+            if let Ok(out) = Command::new(prog).args(&args).output() {
+                if out.status.success() {
+                    if let Some(first) = String::from_utf8_lossy(&out.stdout)
+                        .lines()
+                        .map(str::trim)
+                        .find(|l| !l.is_empty())
+                    {
+                        return first.to_string();
+                    }
+                }
+            }
+        }
+    }
+    String::new()
+}
+
 /// Locate the Claude Code executable when no explicit path is configured.
 pub fn find_claude() -> String {
     // common install locations first — a GUI app's PATH is often minimal (especially on

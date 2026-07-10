@@ -1797,3 +1797,96 @@ a.demo-pill-btn {
   text-decoration: none;
   color: var(--text);
 }
+
+/* ---- live worker visibility ---- */
+
+.live-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--green);
+  animation: demo-pulse 1.4s ease-in-out infinite;
+  flex-shrink: 0;
+}
+
+.worker-live {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin: 2px 0;
+}
+
+.worker-ticker {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 3px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  font-size: 11px;
+  cursor: pointer;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.worker-ticker:hover {
+  background: var(--card-hover);
+}
+.worker-ticker-count {
+  color: var(--accent);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.worker-ticker-item {
+  color: var(--dim);
+  max-width: 340px;
+  white-space: nowrap;
+}
+.worker-ticker-item strong {
+  color: var(--text);
+}
+
+.activity-feed {
+  max-height: 420px;
+  overflow: auto;
+  background: #0d0f14;
+  border: 1px solid var(--line, #2b3242);
+  border-radius: 6px;
+  padding: 6px 8px;
+  margin-top: 8px;
+  font-size: 12px;
+}
+.activity-item {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 3px 2px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+.activity-item:last-child {
+  border-bottom: none;
+}
+.activity-ts {
+  flex-shrink: 0;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 10px;
+}
+.activity-icon {
+  flex-shrink: 0;
+}
+.activity-detail {
+  white-space: pre-wrap;
+  word-break: break-word;
+  min-width: 0;
+}
+.act-tool .activity-detail {
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 11px;
+}
+.act-result .activity-detail {
+  color: var(--green);
+}
+.act-status .activity-detail {
+  color: var(--dim);
+}

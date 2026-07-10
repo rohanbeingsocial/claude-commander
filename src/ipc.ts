@@ -11,6 +11,7 @@ import type {
   Recommendation,
   Task,
   TaskWorkspace,
+  WorkerActivity,
   WorkerTask,
   WorkerUsage,
   Worktree,
@@ -97,6 +98,7 @@ const real = {
     invoke<WorkerTask>("reassign_worker", { workerId, targetAccountId: targetAccountId ?? null }),
   setOperator: (args: { instanceId: number; isOperator: boolean; workerPool: number[]; useOwnAgents: boolean }) =>
     invoke<void>("set_operator", args),
+  workerActivityLog: () => invoke<WorkerActivity[]>("worker_activity_log"),
   mcpStatus: () => invoke<McpStatus>("mcp_status"),
 
   // tasks

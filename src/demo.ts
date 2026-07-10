@@ -793,6 +793,8 @@ export function makeDemoIpc(real: IpcApi): IpcApi {
       inst.workerPool = args.workerPool;
       inst.useOwnAgents = args.useOwnAgents;
     },
+    // live activity capture only exists for real headless workers
+    workerActivityLog: async () => [],
     mcpStatus: async () => {
       const s: McpStatus = {
         running: true,

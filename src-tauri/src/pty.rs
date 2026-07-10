@@ -93,6 +93,56 @@ fn build_command(
     cmd
 }
 
+/// An alternative-engine terminal: Gemini CLI or Codex CLI, interactive in the pane.
+/// These CLIs carry their own auth (~/.gemini, ~/.codex), so accounts here only pick the
+/// grid slot; CLAUDE_CONFIG_DIR is still exported for any `claude` typed inside.
+fn build_engine_command(
+    program: &str,
+    engine: &str,
+    cwd: &str,
+    config_dir: &str,
+    extra_args: &str,
+    initial_prompt: Option<&str>,
+) -> CommandBuilder {
+    // npm installs land these as .cmd shims on Windows, which need cmd.exe to run
+    #[cfg(windows)]
+    let mut cmd = {
+        let lower = program.to_lowercase();
+        if lower.ends_with(".cmd") || lower.ends_with(".bat") {
+            let mut c = CommandBuilder::new("cmd.exe");
+            c.arg("/c");
+            c.arg(program);
+            c
+        } else {
+            CommandBuilder::new(program)
+        }
+    };
+    #[cfg(not(windows))]
+    let mut cmd = CommandBuilder::new(program);
+    for a in extra_args.split_whitespace() {
+        cmd.arg(a);
+    }
+    if let Some(p) = initial_prompt.map(str::trim).filter(|p| !p.is_empty()) {
+        match engine {
+            // gemini: -i runs the prompt, then stays interactive (a bare positional would go one-shot)
+            "gemini" => {
+                cmd.arg("-i");
+                cmd.arg(p);
+            }
+            // codex: a positional prompt opens the interactive TUI with it pre-submitted
+            _ => {
+                cmd.arg(p);
+            }
+        }
+    }
+    cmd.cwd(cwd);
+    cmd.env("CLAUDE_CONFIG_DIR", config_dir);
+    cmd.env_remove("CLAUDECODE");
+    cmd.env_remove("CLAUDE_CODE_ENTRYPOINT");
+    cmd.env_remove("CLAUDE_CODE_SSE_PORT");
+    cmd
+}
+
 pub fn strip_ansi(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();
@@ -232,12 +282,13 @@ pub fn spawn_claude(
     kind: &str,
 ) -> Result<Instance, String> {
     let is_shell = kind == "shell";
+    let is_claude = kind == "claude";
     let state = app.state::<AppState>();
     if !Path::new(cwd).is_dir() {
         return Err(format!("Folder does not exist: {cwd}"));
     }
     let claude = state.claude_path.lock().unwrap().clone();
-    if claude.is_empty() && !is_shell {
+    if claude.is_empty() && is_claude {
         return Err("claude executable not found — set the path in Settings".into());
     }
     let (config_dir, account_name, enabled): (String, String, bool) = {
@@ -261,10 +312,20 @@ pub fn spawn_claude(
         .map_err(|e| e.to_string())?;
     let cmd = if is_shell {
         build_shell_command(cwd, &config_dir)
-    } else {
+    } else if is_claude {
         build_command(&claude, cwd, &config_dir, mode, extra_args, initial_prompt, orch)
+    } else {
+        // alternative engine (gemini / codex)
+        let program = {
+            let conn = state.db.lock().unwrap();
+            crate::misc::resolve_engine(&conn, kind)
+        };
+        if program.is_empty() {
+            return Err(format!("{kind} executable not found — install the {kind} CLI or set its path in Settings"));
+        }
+        build_engine_command(&program, kind, cwd, &config_dir, extra_args, initial_prompt)
     };
-    let mut child = pair.slave.spawn_command(cmd).map_err(|e| format!("Failed to start claude: {e}"))?;
+    let mut child = pair.slave.spawn_command(cmd).map_err(|e| format!("Failed to start {kind}: {e}"))?;
     drop(pair.slave);
     let killer = child.clone_killer();
     let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
@@ -288,8 +349,8 @@ pub fn spawn_claude(
         thread::spawn(move || {
             let mut buf = [0u8; 8192];
             let mut tail = String::new();
-            // shells never trip limit handling — only real Claude sessions are watched
-            let mut limit_notified = is_shell;
+            // only real Claude sessions are watched for limits (not shells/other engines)
+            let mut limit_notified = !is_claude;
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) | Err(_) => break,
@@ -333,7 +394,7 @@ pub fn spawn_claude(
                     "UPDATE instances SET status = CASE WHEN status='running' THEN 'exited' ELSE status END, ended_at=?1, exit_code=?2 WHERE id=?3",
                     params![db::now_str(), code, instance_id],
                 );
-                if !is_shell {
+                if is_claude {
                     if let Some((sid, _)) = crate::failover::find_latest_session(&cfg, &cwd_s) {
                         let _ = conn.execute(
                             "UPDATE instances SET session_id=?1 WHERE id=?2 AND session_id IS NULL",
@@ -398,6 +459,8 @@ pub fn launch_instance(
 ) -> Result<Instance, String> {
     let kind = match kind.as_deref() {
         Some("shell") => "shell",
+        Some("gemini") => "gemini",
+        Some("codex") => "codex",
         _ => "claude",
     };
     // For an orchestrator, mint the MCP config *before* spawning so the launch command can

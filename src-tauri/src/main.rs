@@ -40,6 +40,7 @@ fn main() {
                 ptys: Mutex::new(HashMap::new()),
                 claude_path: Mutex::new(claude),
                 mcp: state::McpState::new(),
+                worker_activity: Mutex::new(HashMap::new()),
             });
 
             // local MCP server: lets an orchestrator instance delegate through Commander
@@ -49,6 +50,7 @@ fn main() {
             let handle = app.handle().clone();
             std::thread::spawn(move || {
                 std::thread::sleep(Duration::from_secs(2));
+                let mut first_tick = true;
                 loop {
                     let interval = {
                         let state = handle.state::<AppState>();
@@ -83,6 +85,11 @@ fn main() {
                     };
                     // auto-wake limit-stuck instances whose window has reset (opt-in setting)
                     failover::auto_wake_tick(&handle);
+                    // auto-wake paused workers on the same account (opt-in setting)
+                    orchestration::auto_wake_workers_tick(&handle);
+                    // warm-up on start / keep 5-hour windows open (opt-in settings)
+                    warmup::auto_tick(&handle, first_tick);
+                    first_tick = false;
                     std::thread::sleep(Duration::from_secs(interval));
                 }
             });
@@ -122,6 +129,7 @@ fn main() {
             orchestration::stop_worker,
             orchestration::reassign_worker,
             orchestration::set_operator,
+            orchestration::worker_activity_log,
             mcp::mcp_status,
             tasks::list_tasks,
             tasks::add_task,

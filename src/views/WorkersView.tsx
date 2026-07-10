@@ -1,8 +1,17 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { open } from "../dialog";
 import { ipc } from "../ipc";
 import { useStore } from "../store";
-import type { ClosureReport, McpStatus, WorkerTask, WorkerUsage } from "../types";
+import type { ClosureReport, McpStatus, WorkerActivity, WorkerTask, WorkerUsage } from "../types";
+
+/** Icon per live-activity kind (see WorkerActivity). */
+const ACT_ICON: Record<string, string> = {
+  start: "▶",
+  text: "💬",
+  tool: "🔧",
+  result: "🏁",
+  status: "•",
+};
 
 const MODELS: { id: string; label: string }[] = [
   { id: "", label: "Account default" },
@@ -48,6 +57,7 @@ export default function WorkersView() {
   const [report, setReport] = useState<ClosureReport | null>(null);
   const [usage, setUsage] = useState<WorkerUsage | null>(null);
   const [mcp, setMcp] = useState<McpStatus | null>(null);
+  const [feedWorkerId, setFeedWorkerId] = useState<number | null>(null);
 
   useEffect(() => {
     refreshWorkers();
@@ -247,11 +257,82 @@ export default function WorkersView() {
             onReport={() => viewReport(w.id)}
             onStop={() => stop(w.id)}
             onReassign={() => reassign(w.id)}
+            onFeed={() => setFeedWorkerId(w.id)}
           />
         ))}
       </div>
 
       {report && <ReportModal report={report} onClose={() => setReport(null)} />}
+      {feedWorkerId != null && <ActivityFeedModal workerId={feedWorkerId} onClose={() => setFeedWorkerId(null)} />}
+    </div>
+  );
+}
+
+/** The most recent activity line for a worker — the "what is it doing right now" glance. */
+function LiveActivityLine({ workerId, running }: { workerId: number; running: boolean }) {
+  const acts = useStore((s) => s.workerActivity[workerId]);
+  const last = acts?.[acts.length - 1];
+  if (!last) {
+    return running ? <div className="dim small worker-live">⏳ starting…</div> : null;
+  }
+  return (
+    <div className="worker-live small" title={last.detail}>
+      {running && <span className="live-dot" />}
+      <span className="dim">{ACT_ICON[last.kind] ?? "•"}</span>{" "}
+      <span className="ellipsis">{last.detail}</span>
+    </div>
+  );
+}
+
+/** Full live feed for one worker: every captured stream item, newest at the bottom,
+ *  auto-scrolling as events arrive. Pure display — the worker costs the same either way. */
+function ActivityFeedModal({ workerId, onClose }: { workerId: number; onClose: () => void }) {
+  const acts: WorkerActivity[] = useStore((s) => s.workerActivity[workerId]) ?? [];
+  const worker = useStore((s) => s.workers.find((w) => w.id === workerId));
+  const endRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [acts.length]);
+  return (
+    <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="modal">
+        <div className="modal-head">
+          <h2>
+            Worker #{workerId} — live activity
+            {worker?.status === "running" && <span className="live-dot" style={{ marginLeft: 8 }} />}
+          </h2>
+          <button className="btn btn-ghost btn-sm" onClick={onClose}>
+            ✕
+          </button>
+        </div>
+        {worker && (
+          <div className="dim small">
+            {worker.accountName}
+            {worker.model ? ` · ${worker.model}` : ""} · {statusLabel(worker.status)}
+          </div>
+        )}
+        <div className="activity-feed">
+          {acts.length === 0 && (
+            <div className="dim small">
+              Nothing captured yet. The feed fills as the worker streams output (only workers started this app run are
+              captured live — older ones keep their full log in <code>stream.jsonl</code>, see Report).
+            </div>
+          )}
+          {acts.map((a, i) => (
+            <div key={i} className={`activity-item act-${a.kind}`}>
+              <span className="dim small activity-ts">{new Date(a.ts).toLocaleTimeString()}</span>
+              <span className="activity-icon">{ACT_ICON[a.kind] ?? "•"}</span>
+              <span className="activity-detail">{a.detail}</span>
+            </div>
+          ))}
+          <div ref={endRef} />
+        </div>
+        <div className="modal-actions">
+          <button className="btn" onClick={onClose}>
+            Close
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -261,11 +342,13 @@ function WorkerRow({
   onReport,
   onStop,
   onReassign,
+  onFeed,
 }: {
   worker: WorkerTask;
   onReport: () => void;
   onStop: () => void;
   onReassign: () => void;
+  onFeed: () => void;
 }) {
   const w = worker;
   const canReassign = w.status === "paused_at_limit" || w.status === "failed" || w.status === "stopped";
@@ -277,6 +360,9 @@ function WorkerRow({
           {w.model ? ` · ${w.model}` : ""}
         </span>
         <span className="row">
+          <button className="btn btn-sm btn-ghost" onClick={onFeed} title="Watch what this worker is doing, live">
+            Live
+          </button>
           <button className="btn btn-sm btn-ghost" onClick={onReport}>
             Report
           </button>
@@ -295,6 +381,7 @@ function WorkerRow({
       <div className="dim small ellipsis" title={w.prompt}>
         {w.prompt}
       </div>
+      <LiveActivityLine workerId={w.id} running={w.status === "running"} />
       <div className="dim small">
         {fmtTime(w.createdAt)}
         {w.freesAt ? ` · resets ${fmtTime(w.freesAt)}` : ""}

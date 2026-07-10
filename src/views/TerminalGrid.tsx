@@ -28,6 +28,13 @@ const LS_KEY = isDemoMode() ? "mosaicLayout.demo" : "mosaicLayout";
 
 const isLive = (i: Instance) => i.status === "running" || i.status === "limit_hit";
 
+/** Header chip per non-Claude engine kind. */
+const KIND_CHIP: Record<string, { label: string; title: string }> = {
+  shell: { label: "⌨ SHELL", title: "Plain shell terminal — CLAUDE_CONFIG_DIR points at this account" },
+  gemini: { label: "◇ GEMINI", title: "Gemini CLI — auth from ~/.gemini (not this Claude account)" },
+  codex: { label: "⬢ CODEX", title: "Codex CLI — auth from ~/.codex (not this Claude account)" },
+};
+
 // ---- layout tree helpers (keys = instance ids) ----
 
 function pathToLeaf(node: MosaicNode<number> | null, id: number, path: MosaicBranch[] = []): MosaicPath | null {
@@ -152,6 +159,7 @@ function TileToolbar({
   }, [inst.status]);
 
   const isShell = inst.kind === "shell";
+  const isClaude = inst.kind === "claude";
   const resume = async () => {
     setBusy(true);
     try {
@@ -159,7 +167,8 @@ function TileToolbar({
         accountId: inst.accountId,
         projectId: inst.projectId ?? undefined,
         cwd: inst.cwd,
-        mode: isShell ? "new" : "continue",
+        // only Claude Code has --continue; shells and other engines just relaunch
+        mode: isClaude ? "continue" : "new",
         kind: inst.kind,
       });
       await refreshInstances();
@@ -231,9 +240,9 @@ function TileToolbar({
       <div className="cell-id ellipsis">
         <span className={`status-dot st-${status}`} />
         <strong>{inst.accountName}</strong>
-        {isShell && (
-          <span className="cell-shell" title="Plain shell terminal — CLAUDE_CONFIG_DIR points at this account">
-            ⌨ SHELL
+        {KIND_CHIP[inst.kind] && (
+          <span className="cell-shell" title={KIND_CHIP[inst.kind].title}>
+            {KIND_CHIP[inst.kind].label}
           </span>
         )}
         <span className="dim small ellipsis" title={`Worktree: ${inst.cwd}`} style={{ color: wt }}>
@@ -251,7 +260,7 @@ function TileToolbar({
         )}
       </div>
       <div className="cell-usage">
-        {!isShell && (
+        {isClaude && (
           <>
             <UsageMini label="5h" pct={account?.fiveHour.pct} live={account?.fiveHour.source === "live"} />
             <UsageMini label="wk" pct={account?.weekly.pct} live={account?.weekly.source === "live"} />
@@ -269,7 +278,7 @@ function TileToolbar({
           </button>
         ) : (
           <>
-            <button className="icon-btn" title={isShell ? "Relaunch shell" : "Resume (--continue)"} onClick={resume} disabled={busy}>
+            <button className="icon-btn" title={isClaude ? "Resume (--continue)" : "Relaunch"} onClick={resume} disabled={busy}>
               ▸
             </button>
             <button className="icon-btn danger" title="Close & remove" onClick={close}>
@@ -277,7 +286,7 @@ function TileToolbar({
             </button>
           </>
         )}
-        <div className="menu-anchor" style={isShell ? { display: "none" } : undefined}>
+        <div className="menu-anchor" style={!isClaude ? { display: "none" } : undefined}>
           <button
             ref={opBtnRef}
             className={`icon-btn ${inst.isOrchestrator ? "op-on" : ""}`}
@@ -352,7 +361,7 @@ function TileToolbar({
                 }}
               />
               <div className="menu-pop menu-pop-fixed" style={menuStyle} onMouseDown={(e) => e.stopPropagation()}>
-                {!isShell && (
+                {isClaude && (
                 <button className="menu-item" onClick={handover}>
                   Generate handover
                   <span className="dim small">write .project-memory/handover.md</span>
@@ -376,7 +385,7 @@ function TileToolbar({
                 >
                   Open external terminal
                 </button>
-                {!isShell && (
+                {isClaude && (
                   <>
                     <div className="menu-sep">Failover to…</div>
                     {recs.map((r) => (
@@ -416,7 +425,7 @@ function TileBody({ inst }: { inst: Instance }) {
   const toast = useStore((s) => s.toast);
   const [busy, setBusy] = useState(false);
 
-  const isShell = inst.kind === "shell";
+  const isClaude = inst.kind === "claude";
   const resume = async () => {
     setBusy(true);
     try {
@@ -424,7 +433,7 @@ function TileBody({ inst }: { inst: Instance }) {
         accountId: inst.accountId,
         projectId: inst.projectId ?? undefined,
         cwd: inst.cwd,
-        mode: isShell ? "new" : "continue",
+        mode: isClaude ? "continue" : "new",
         kind: inst.kind,
       });
       await refreshInstances();
@@ -441,8 +450,36 @@ function TileBody({ inst }: { inst: Instance }) {
     <div className="cell-resume">
       <p className="dim small">Ran in a previous session (exit {inst.exitCode ?? "?"}).</p>
       <button className="btn btn-primary btn-sm" onClick={resume} disabled={busy}>
-        {isShell ? `Relaunch shell (${inst.accountName})` : `Resume on ${inst.accountName}`}
+        {isClaude ? `Resume on ${inst.accountName}` : `Relaunch ${inst.kind} (${inst.accountName})`}
       </button>
+    </div>
+  );
+}
+
+/** Compact live strip under the grid bar: every running headless worker with its latest
+ *  action. The answer to "which accounts are running and what are they doing" without
+ *  leaving the terminals view. Click-through to the Workers view. */
+function WorkerTicker() {
+  const workers = useStore((s) => s.workers);
+  const workerActivity = useStore((s) => s.workerActivity);
+  const setView = useStore((s) => s.setView);
+  const running = workers.filter((w) => w.status === "running");
+  if (running.length === 0) return null;
+  return (
+    <div className="worker-ticker" onClick={() => setView("workers")} title="Open the Workers view">
+      <span className="live-dot" />
+      <span className="worker-ticker-count">
+        {running.length} worker{running.length === 1 ? "" : "s"}
+      </span>
+      {running.map((w) => {
+        const acts = workerActivity[w.id];
+        const last = acts?.[acts.length - 1];
+        return (
+          <span key={w.id} className="worker-ticker-item ellipsis" title={last?.detail ?? w.prompt}>
+            <strong>{w.accountName}</strong> ▸ {last?.detail ?? "starting…"}
+          </span>
+        );
+      })}
     </div>
   );
 }
@@ -505,9 +542,16 @@ export default function TerminalGrid() {
   };
 
   const bar = (
+    <>
     <div className="grid-bar">
       <button className="btn btn-primary btn-sm" onClick={() => openLaunch()}>
         + New Claude
+      </button>
+      <button className="btn btn-sm" title="Gemini CLI terminal" onClick={() => openLaunch({ kind: "gemini" })}>
+        + Gemini
+      </button>
+      <button className="btn btn-sm" title="Codex CLI terminal" onClick={() => openLaunch({ kind: "codex" })}>
+        + Codex
       </button>
       <button className="btn btn-sm" title="Plain shell terminal (account env preloaded)" onClick={() => openLaunch({ kind: "shell" })}>
         + Shell
@@ -522,6 +566,8 @@ export default function TerminalGrid() {
         </button>
       )}
     </div>
+    <WorkerTicker />
+    </>
   );
 
   if (grid.length === 0) {

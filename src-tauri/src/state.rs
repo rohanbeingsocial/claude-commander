@@ -27,4 +27,7 @@ pub struct AppState {
     pub ptys: Mutex<HashMap<i64, PtyHandle>>,
     pub claude_path: Mutex<String>,
     pub mcp: McpState,
+    /// Recent live-activity items per running worker (small ring, newest last) — lets the
+    /// UI show what each headless worker is doing without re-reading stream.jsonl.
+    pub worker_activity: Mutex<HashMap<i64, Vec<crate::models::WorkerActivity>>>,
 }

@@ -56,7 +56,7 @@ export interface Instance {
   accountName: string;
   projectName: string | null;
   mode: string;
-  /** "claude" (a Claude Code session) or "shell" (plain PowerShell terminal). */
+  /** "claude" (Claude Code) | "shell" (plain terminal) | "gemini" (Gemini CLI) | "codex" (Codex CLI). */
   kind: string;
   isOrchestrator: boolean;
   workerPool: number[];
@@ -125,6 +125,16 @@ export interface ClosureReport {
   diff: string;
   resumeHandle: string | null;
   freesAt: string | null;
+}
+
+/** One live-activity item from a headless worker's output stream — what it's doing right
+ *  now. Fetched via workerActivityLog and pushed live as "worker-activity" events. */
+export interface WorkerActivity {
+  workerId: number;
+  ts: string;
+  /** "start" | "text" | "tool" | "result" | "status" */
+  kind: string;
+  detail: string;
 }
 
 export interface McpStatus {

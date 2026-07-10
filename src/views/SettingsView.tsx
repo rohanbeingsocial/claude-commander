@@ -112,18 +112,25 @@ export default function SettingsView() {
   const refreshAccounts = useStore((s) => s.refreshAccounts);
   const toast = useStore((s) => s.toast);
   const [claudePath, setClaudePath] = useState("");
+  const [geminiPath, setGeminiPath] = useState("");
+  const [codexPath, setCodexPath] = useState("");
   const [scanInterval, setScanInterval] = useState("60");
   const [tapBusy, setTapBusy] = useState(false);
 
   useEffect(() => {
     setClaudePath(settings.claude_path ?? "");
+    setGeminiPath(settings.gemini_path ?? "");
+    setCodexPath(settings.codex_path ?? "");
     setScanInterval(settings.scan_interval_secs ?? "60");
   }, [settings]);
 
   const autoFailover = settings.auto_failover === "1";
   const autoReassign = settings.auto_reassign === "1";
   const autoWake = settings.auto_wake === "1";
+  const autoWakeWorkers = settings.auto_wake_workers === "1";
   const autoWarmup = settings.auto_warmup === "1";
+  const warmupOnStart = settings.warmup_on_start === "1";
+  const autoRewarm = settings.auto_rewarm === "1";
   const usageTap = settings.usage_tap === "1";
 
   const warmNow = async () => {
@@ -173,11 +180,11 @@ export default function SettingsView() {
     }
   };
 
-  const browseClaude = async () => {
-    const f = await open({ title: "Locate claude.exe", filters: [{ name: "Executable", extensions: ["exe", "cmd"] }] });
+  const browseExe = async (label: string, key: string, setter: (v: string) => void) => {
+    const f = await open({ title: `Locate ${label}`, filters: [{ name: "Executable", extensions: ["exe", "cmd"] }] });
     if (typeof f === "string") {
-      setClaudePath(f);
-      await setKey("claude_path", f);
+      setter(f);
+      await setKey(key, f);
     }
   };
 
@@ -256,12 +263,40 @@ export default function SettingsView() {
         <label className="radio">
           <input
             type="checkbox"
+            checked={autoWakeWorkers}
+            onChange={(e) => setKey("auto_wake_workers", e.target.checked ? "1" : "0")}
+          />
+          Auto-wake paused workers — a delegated worker parked at its usage limit resumes on the same account the
+          moment its window resets, continuing from its saved progress (not restarting).
+        </label>
+        <label className="radio">
+          <input
+            type="checkbox"
             checked={autoWarmup}
             onChange={(e) => setKey("auto_warmup", e.target.checked ? "1" : "0")}
           />
           Auto warm-up — when you launch a Claude, open the 5-hour window on every other enabled account too: a
           headless <code>claude -p</code> (haiku) sends one throwaway prompt and is killed the moment the first reply
           arrives. All your timers run from the start of your day instead of starting mid-task.
+        </label>
+        <label className="radio">
+          <input
+            type="checkbox"
+            checked={warmupOnStart}
+            onChange={(e) => setKey("warmup_on_start", e.target.checked ? "1" : "0")}
+          />
+          Warm up on app start — open every enabled account's 5-hour window as soon as Commander launches, so all
+          timers start with your day.
+        </label>
+        <label className="radio">
+          <input
+            type="checkbox"
+            checked={autoRewarm}
+            onChange={(e) => setKey("auto_rewarm", e.target.checked ? "1" : "0")}
+          />
+          Keep windows open — whenever an account's 5-hour window lapses, automatically re-open it (one throwaway
+          haiku prompt each time, ~5x/day per account). Uses accounts with live usage data (the status-line tap), so
+          Commander knows a window really closed rather than the account being signed out.
         </label>
         <div className="row" style={{ marginTop: 6 }}>
           <button className="btn btn-sm" onClick={warmNow} title="Open the 5-hour window on every enabled account whose window is closed">
@@ -297,8 +332,13 @@ export default function SettingsView() {
       </div>
 
       <div className="card settings-card">
-        <h3>Claude executable</h3>
-        <div className="dim small">Detected: {settings.claude_path_resolved || "not found"}</div>
+        <h3>CLI executables</h3>
+        <div className="info-box dim small">
+          <strong>Claude Code</strong> powers instances, workers, failover and warm-up. <strong>Gemini CLI</strong> and{" "}
+          <strong>Codex CLI</strong> are optional — when installed you can open them as grid terminals (+ Gemini /
+          + Codex). Empty = auto-detect from PATH and common install dirs.
+        </div>
+        <div className="dim small">claude — detected: {settings.claude_path_resolved || "not found"}</div>
         <div className="row" style={{ marginTop: 6 }}>
           <input
             style={{ flex: 1 }}
@@ -306,10 +346,44 @@ export default function SettingsView() {
             value={claudePath}
             onChange={(e) => setClaudePath(e.target.value)}
           />
-          <button className="btn btn-sm" onClick={browseClaude}>
+          <button className="btn btn-sm" onClick={() => browseExe("claude.exe", "claude_path", setClaudePath)}>
             Browse…
           </button>
           <button className="btn btn-sm" onClick={() => setKey("claude_path", claudePath)}>
+            Save
+          </button>
+        </div>
+        <div className="dim small" style={{ marginTop: 10 }}>
+          gemini — detected: {settings.gemini_path_resolved || "not found"}
+        </div>
+        <div className="row" style={{ marginTop: 6 }}>
+          <input
+            style={{ flex: 1 }}
+            placeholder="override path to the gemini CLI (empty = auto-detect)"
+            value={geminiPath}
+            onChange={(e) => setGeminiPath(e.target.value)}
+          />
+          <button className="btn btn-sm" onClick={() => browseExe("the gemini CLI", "gemini_path", setGeminiPath)}>
+            Browse…
+          </button>
+          <button className="btn btn-sm" onClick={() => setKey("gemini_path", geminiPath)}>
+            Save
+          </button>
+        </div>
+        <div className="dim small" style={{ marginTop: 10 }}>
+          codex — detected: {settings.codex_path_resolved || "not found"}
+        </div>
+        <div className="row" style={{ marginTop: 6 }}>
+          <input
+            style={{ flex: 1 }}
+            placeholder="override path to the codex CLI (empty = auto-detect)"
+            value={codexPath}
+            onChange={(e) => setCodexPath(e.target.value)}
+          />
+          <button className="btn btn-sm" onClick={() => browseExe("the codex CLI", "codex_path", setCodexPath)}>
+            Browse…
+          </button>
+          <button className="btn btn-sm" onClick={() => setKey("codex_path", codexPath)}>
             Save
           </button>
         </div>

@@ -261,6 +261,12 @@ pub fn boot(conn: &Connection) {
         ("extra_args_default", ""),
         ("auto_reassign", "0"),
         ("auto_wake", "0"),
+        ("auto_wake_workers", "0"),
+        ("auto_warmup", "0"),
+        ("warmup_on_start", "0"),
+        ("auto_rewarm", "0"),
+        ("gemini_path", ""),
+        ("codex_path", ""),
         ("worker_extra_args_default", "--dangerously-skip-permissions"),
     ] {
         let _ = conn.execute("INSERT OR IGNORE INTO settings(key,value) VALUES(?1,?2)", params![k, v]);

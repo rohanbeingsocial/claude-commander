@@ -90,6 +90,65 @@ fn warm_one(claude: &str, config_dir: &str) -> Result<(), String> {
 /// toast because the interesting part happens seconds later.
 #[tauri::command]
 pub fn warm_accounts(app: AppHandle, account_ids: Vec<i64>) -> Result<usize, String> {
+    warm_many(app, account_ids)
+}
+
+/// Automatic warm-ups, run from the background scanner loop.
+/// - `warmup_on_start` (first tick only): open every enabled account's window at app boot.
+/// - `auto_rewarm`: whenever an account's 5-hour window has lapsed, re-open it — timers
+///   are then ALWAYS running while Commander is up. Only accounts with live usage data
+///   qualify (without it we can't tell a closed window from a signed-out account, and a
+///   signed-out one would burn a failed warm-up every tick).
+pub fn auto_tick(app: &AppHandle, first_tick: bool) {
+    let state = app.state::<AppState>();
+    let (on_start, rewarm) = {
+        let conn = state.db.lock().unwrap();
+        (
+            db::get_setting(&conn, "warmup_on_start").as_deref() == Some("1"),
+            db::get_setting(&conn, "auto_rewarm").as_deref() == Some("1"),
+        )
+    };
+    if !(rewarm || (first_tick && on_start)) {
+        return;
+    }
+    let mut ids: Vec<i64> = Vec::new();
+    {
+        let conn = state.db.lock().unwrap();
+        let rows: Vec<(i64, String)> = conn
+            .prepare("SELECT id, config_dir FROM accounts WHERE enabled=1")
+            .and_then(|mut s| s.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).map(|rows| rows.flatten().collect()))
+            .unwrap_or_default();
+        let now = chrono::Utc::now().timestamp();
+        for (id, cfg) in rows {
+            let live = crate::usage::read_live_usage(&cfg);
+            let open = live
+                .as_ref()
+                .and_then(|l| l.five_hour.as_ref())
+                .map(|w| w.resets_at > now)
+                .unwrap_or(false);
+            if open {
+                continue; // window already running — nothing to gain
+            }
+            let weekly_full = live
+                .as_ref()
+                .and_then(|l| l.seven_day.as_ref())
+                .map(|w| w.used_percentage >= 99.5)
+                .unwrap_or(false);
+            if weekly_full {
+                continue; // weekly-limited: a warm-up would just fail
+            }
+            if (first_tick && on_start) || (rewarm && live.is_some()) {
+                ids.push(id);
+            }
+        }
+    }
+    if !ids.is_empty() {
+        let _ = warm_many(app.clone(), ids);
+    }
+}
+
+/// Core of `warm_accounts`, reused by the automatic ticks.
+pub fn warm_many(app: AppHandle, account_ids: Vec<i64>) -> Result<usize, String> {
     let state = app.state::<AppState>();
     let claude = state.claude_path.lock().unwrap().clone();
     if claude.is_empty() {

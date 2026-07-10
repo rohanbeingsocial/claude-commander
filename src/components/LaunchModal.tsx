@@ -6,6 +6,18 @@ import type { Recommendation, Worktree } from "../types";
 import { basename } from "../util";
 import { maybeAutoWarm } from "../warmup";
 
+type LaunchKind = "claude" | "shell" | "gemini" | "codex";
+
+const KIND_TITLE: Record<LaunchKind, string> = {
+  claude: "New Claude instance",
+  shell: "New terminal",
+  gemini: "New Gemini CLI instance",
+  codex: "New Codex CLI instance",
+};
+
+const asKind = (k?: string): LaunchKind =>
+  k === "shell" || k === "gemini" || k === "codex" ? k : "claude";
+
 export default function LaunchModal() {
   const launchOpen = useStore((s) => s.launchOpen);
   const launchPreset = useStore((s) => s.launchPreset);
@@ -24,7 +36,7 @@ export default function LaunchModal() {
   const [worktreePath, setWorktreePath] = useState("");
   const [newBranch, setNewBranch] = useState("");
   const [baseBranch, setBaseBranch] = useState("");
-  const [kind, setKind] = useState<"claude" | "shell">("claude");
+  const [kind, setKind] = useState<LaunchKind>("claude");
   const [mode, setMode] = useState<"new" | "continue">("new");
   const [extraArgs, setExtraArgs] = useState("");
   const [initialPrompt, setInitialPrompt] = useState("");
@@ -41,7 +53,7 @@ export default function LaunchModal() {
     setWorkerPool([]);
     setUseOwnAgents(false);
     setNewBranch("");
-    setKind(launchPreset?.kind === "shell" ? "shell" : "claude");
+    setKind(asKind(launchPreset?.kind));
     setMode((launchPreset?.mode as "new" | "continue") ?? "new");
     setExtraArgs(settings.extra_args_default ?? "");
     setProjectId(launchPreset?.projectId ?? (projects[0]?.id ?? null));
@@ -91,6 +103,12 @@ export default function LaunchModal() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [launchOpen, projectId]);
 
+  // the saved default args are Claude flags — don't leak them into other engines
+  useEffect(() => {
+    setExtraArgs(kind === "claude" ? settings.extra_args_default ?? "" : "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kind]);
+
   if (!launchOpen) return null;
 
   const project = projects.find((x) => x.id === projectId);
@@ -130,20 +148,21 @@ export default function LaunchModal() {
         const wt = await ipc.addWorktree(project.id, newBranch.trim(), true, baseBranch || undefined);
         cwd = wt.path;
       }
-      if ((settings.extra_args_default ?? "") !== extraArgs) {
+      if (kind === "claude" && (settings.extra_args_default ?? "") !== extraArgs) {
         ipc.setSetting("extra_args_default", extraArgs).catch(() => {});
       }
       const isShell = kind === "shell";
+      const isClaude = kind === "claude";
       const inst = await ipc.launchInstance({
         accountId,
         projectId: project.id,
         cwd,
-        mode: isShell ? "new" : mode,
+        mode: isClaude ? mode : "new",
         extraArgs: isShell ? "" : extraArgs,
         initialPrompt: isShell ? undefined : initialPrompt || undefined,
-        isOrchestrator: isShell ? false : isOrchestrator,
-        workerPool: !isShell && isOrchestrator ? workerPool : undefined,
-        useOwnAgents: !isShell && isOrchestrator ? useOwnAgents : undefined,
+        isOrchestrator: isClaude ? isOrchestrator : false,
+        workerPool: isClaude && isOrchestrator ? workerPool : undefined,
+        useOwnAgents: isClaude && isOrchestrator ? useOwnAgents : undefined,
         kind,
       });
       const s = useStore.getState();
@@ -153,7 +172,7 @@ export default function LaunchModal() {
       s.setView("terminals");
       closeLaunch();
       toast("success", `${inst.accountName} launched in ${basename(cwd)}`);
-      if (!isShell) void maybeAutoWarm(accountId);
+      if (isClaude) void maybeAutoWarm(accountId);
     } catch (e) {
       toast("error", String(e));
     } finally {
@@ -165,7 +184,7 @@ export default function LaunchModal() {
     <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && closeLaunch()}>
       <div className="modal">
         <div className="modal-head">
-          <h2>{kind === "shell" ? "New terminal" : "New Claude instance"}</h2>
+          <h2>{KIND_TITLE[kind]}</h2>
           <button className="btn btn-ghost btn-sm" onClick={closeLaunch}>
             ✕
           </button>
@@ -177,10 +196,23 @@ export default function LaunchModal() {
             <input type="radio" checked={kind === "claude"} onChange={() => setKind("claude")} /> Claude Code
           </label>
           <label className="radio">
+            <input type="radio" checked={kind === "gemini"} onChange={() => setKind("gemini")} /> Gemini CLI
+          </label>
+          <label className="radio">
+            <input type="radio" checked={kind === "codex"} onChange={() => setKind("codex")} /> Codex CLI
+          </label>
+          <label className="radio">
             <input type="radio" checked={kind === "shell"} onChange={() => setKind("shell")} /> Plain terminal
             (your shell, with the account's <code>CLAUDE_CONFIG_DIR</code> preloaded)
           </label>
         </div>
+        {(kind === "gemini" || kind === "codex") && (
+          <div className="info-box dim small">
+            Runs the <strong>{kind} CLI</strong> in this pane. It signs in with its own auth (
+            <code>{kind === "gemini" ? "~/.gemini" : "~/.codex"}</code>), so the account below only names the grid
+            slot — usage meters, failover and delegation stay Claude-only for now.
+          </div>
+        )}
 
         <label className="field-label">Account</label>
         <div className="rec-list">
@@ -333,18 +365,24 @@ export default function LaunchModal() {
             </label>
           </>
         )}
+        </>
+        )}
 
+        {kind !== "shell" && (
+        <>
         <label className="field-label">Opening prompt (optional)</label>
         <textarea
           rows={2}
-          placeholder="e.g. Read .project-memory/handover.md and continue"
+          placeholder={kind === "claude" ? "e.g. Read .project-memory/handover.md and continue" : "runs as the first prompt, then stays interactive"}
           value={initialPrompt}
           onChange={(e) => setInitialPrompt(e.target.value)}
         />
 
         <label className="field-label">Extra CLI args (optional)</label>
         <input
-          placeholder="e.g. --dangerously-skip-permissions --model claude-sonnet-5"
+          placeholder={
+            kind === "claude" ? "e.g. --dangerously-skip-permissions --model claude-sonnet-5" : `passed to the ${kind} CLI`
+          }
           value={extraArgs}
           onChange={(e) => setExtraArgs(e.target.value)}
         />

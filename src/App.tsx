@@ -11,7 +11,7 @@ import Toasts from "./components/Toasts";
 import { useStore } from "./store";
 import { initPtyRouting } from "./terminals";
 import { IS_MAC } from "./util";
-import type { AccountUsage, FailoverDoneEv, LimitHitEv, PtyExitEv, ToastEv, View } from "./types";
+import type { AccountUsage, FailoverDoneEv, LimitHitEv, PtyExitEv, ToastEv, View, WorkerActivity } from "./types";
 import Dashboard from "./views/Dashboard";
 import Projects from "./views/Projects";
 import SettingsView from "./views/SettingsView";
@@ -44,6 +44,7 @@ export default function App() {
   useEffect(() => {
     initPtyRouting();
     useStore.getState().refreshAll();
+    useStore.getState().refreshWorkerActivity();
 
     const onFailoverDone = (p: FailoverDoneEv) => {
       const s = useStore.getState();
@@ -77,6 +78,13 @@ export default function App() {
           listen<FailoverDoneEv>("failover-done", (e) => onFailoverDone(e.payload)),
           listen<ToastEv>("toast", (e) => useStore.getState().toast(e.payload.level, e.payload.message)),
           listen("workers-updated", () => useStore.getState().refreshWorkers()),
+          listen<WorkerActivity>("worker-activity", (e) => {
+            const s = useStore.getState();
+            s.appendWorkerActivity(e.payload);
+            // first sign of life from a worker the list doesn't know yet (e.g. delegated
+            // via MCP moments ago) — pull the list so the ticker can name it
+            if (!s.workers.some((w) => w.id === e.payload.workerId)) s.refreshWorkers();
+          }),
         ];
 
     const onKey = (ev: KeyboardEvent) => {

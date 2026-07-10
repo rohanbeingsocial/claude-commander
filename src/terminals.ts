@@ -1,56 +1,12 @@
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { listen } from "@tauri-apps/api/event";
-import { readText as clipReadText, writeText as clipWriteText } from "@tauri-apps/plugin-clipboard-manager";
+import { readClipboard, writeClipboard } from "./clipboard";
 import { isDemoMode, onDemoPtyOut } from "./demo";
 import { ipc } from "./ipc";
 import { useStore } from "./store";
 import { b64decode, b64encodeText, IS_MAC } from "./util";
 import type { PtyOutEv } from "./types";
-
-/** Read the OS clipboard. The native Rust command is tried first — it cannot be blocked
- *  by WebView2 clipboard permission policy (which can silently break both
- *  navigator.clipboard and the plugin's JS path). Returns null when every reader
- *  FAILED (vs "" = clipboard genuinely empty). */
-async function readClipboard(): Promise<string | null> {
-  try {
-    return await ipc.clipboardRead();
-  } catch {
-    /* fall through */
-  }
-  try {
-    return (await clipReadText()) ?? "";
-  } catch {
-    /* fall through */
-  }
-  try {
-    return await navigator.clipboard.readText();
-  } catch {
-    return null;
-  }
-}
-
-/** Write text to the OS clipboard, native-first. Returns false when every writer failed. */
-async function writeClipboard(text: string): Promise<boolean> {
-  try {
-    await ipc.clipboardWrite(text);
-    return true;
-  } catch {
-    /* fall through */
-  }
-  try {
-    await clipWriteText(text);
-    return true;
-  } catch {
-    /* fall through */
-  }
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 interface Entry {
   term: Terminal;
