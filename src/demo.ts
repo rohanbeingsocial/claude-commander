@@ -1,6 +1,6 @@
 // Demo mode — an in-memory stand-in for the whole Rust backend so anyone can explore
-// the terminal grid, account adding, tasks and delegation WITHOUT Claude Code installed
-// or any account signed in. Nothing here touches the real DB, config dirs or spawns a
+// the terminal grid, account adding, tasks, delegation, autopilot, pools and the
+// Gemini/Codex engines WITHOUT Claude Code installed or any account signed in. Nothing here touches the real DB, config dirs or spawns a
 // process: every "terminal" is scripted output, every account is fabricated, and all
 // state lives in this module (reload = reset). Toggled via localStorage["demoMode"];
 // ipc.ts swaps the real invoke-backed API for makeDemoIpc() at startup.
@@ -20,6 +20,7 @@ import type {
   Task,
   TaskWorkspace,
   WindowUsage,
+  WorkerActivity,
   WorkerTask,
   WorkerUsage,
   Worktree,
@@ -109,6 +110,7 @@ interface DemoAccount {
   name: string;
   email: string | null;
   configDir: string;
+  engine: string; // "claude" | "gemini" | "codex"
   plan: string;
   fiveHourBudget: number;
   weeklyBudget: number;
@@ -132,31 +134,46 @@ let nextId = 100; // shared counter for instances / tasks / workers / handovers 
 const accounts: DemoAccount[] = [
   {
     id: 1, name: "Main", email: "demo-main@example.com",
-    configDir: "C:\\Users\\you\\.claude", plan: "max5x",
+    configDir: "C:\\Users\\you\\.claude", engine: "claude", plan: "max5x",
     fiveHourBudget: 2_000_000, weeklyBudget: 15_000_000, enabled: true, calibrated: true,
     fiveHourPct: 42, weeklyPct: 31, fiveHourResetMs: now() + 2.4 * HOUR, weeklyResetMs: now() + 3.2 * 24 * HOUR,
     live: true, limitHitUntilMs: null,
   },
   {
     id: 2, name: "Work", email: "demo-work@example.com",
-    configDir: "C:\\Users\\you\\.claude-accounts\\work", plan: "pro",
+    configDir: "C:\\Users\\you\\.claude-accounts\\work", engine: "claude", plan: "pro",
     fiveHourBudget: 400_000, weeklyBudget: 3_000_000, enabled: true, calibrated: true,
     fiveHourPct: 78, weeklyPct: 55, fiveHourResetMs: now() + 1.1 * HOUR, weeklyResetMs: now() + 5.5 * 24 * HOUR,
     live: true, limitHitUntilMs: null,
   },
   {
     id: 3, name: "Spare", email: "demo-spare@example.com",
-    configDir: "C:\\Users\\you\\.claude-accounts\\spare", plan: "pro",
+    configDir: "C:\\Users\\you\\.claude-accounts\\spare", engine: "claude", plan: "pro",
     fiveHourBudget: 400_000, weeklyBudget: 3_000_000, enabled: true, calibrated: false,
     fiveHourPct: 8, weeklyPct: 12, fiveHourResetMs: now() + 4.6 * HOUR, weeklyResetMs: now() + 6.1 * 24 * HOUR,
     live: false, limitHitUntilMs: null,
   },
   {
     id: 4, name: "Burner", email: "demo-burner@example.com",
-    configDir: "C:\\Users\\you\\.claude-accounts\\burner", plan: "pro",
+    configDir: "C:\\Users\\you\\.claude-accounts\\burner", engine: "claude", plan: "pro",
     fiveHourBudget: 400_000, weeklyBudget: 3_000_000, enabled: true, calibrated: true,
     fiveHourPct: 96, weeklyPct: 71, fiveHourResetMs: now() + 52 * MIN, weeklyResetMs: now() + 1.8 * 24 * HOUR,
     live: false, limitHitUntilMs: now() + 52 * MIN,
+  },
+  // engine accounts — no usage meters (their CLIs don't publish rate-limit windows)
+  {
+    id: 5, name: "Gemini", email: null,
+    configDir: "C:\\Users\\you\\.gemini", engine: "gemini", plan: "-",
+    fiveHourBudget: 0, weeklyBudget: 0, enabled: true, calibrated: false,
+    fiveHourPct: 0, weeklyPct: 0, fiveHourResetMs: now() + 5 * HOUR, weeklyResetMs: now() + 7 * 24 * HOUR,
+    live: false, limitHitUntilMs: null,
+  },
+  {
+    id: 6, name: "Codex", email: null,
+    configDir: "C:\\Users\\you\\.codex-accounts\\1", engine: "codex", plan: "-",
+    fiveHourBudget: 0, weeklyBudget: 0, enabled: true, calibrated: false,
+    fiveHourPct: 0, weeklyPct: 0, fiveHourResetMs: now() + 5 * HOUR, weeklyResetMs: now() + 7 * 24 * HOUR,
+    live: false, limitHitUntilMs: null,
   },
 ];
 
@@ -191,6 +208,12 @@ const instances: Instance[] = [
     accountName: "Work", projectName: "acme-web", mode: "new", kind: "claude",
     isOrchestrator: false, workerPool: [], useOwnAgents: false, peerLabel: "CC2.1",
   },
+  {
+    id: 3, accountId: 5, projectId: 1, cwd: "C:\\Dev\\acme-web", status: "running",
+    startedAt: iso(now() - 8 * MIN), endedAt: null, exitCode: null, sessionId: "demo-session-3",
+    accountName: "Gemini", projectName: "acme-web", mode: "new", kind: "gemini",
+    isOrchestrator: false, workerPool: [], useOwnAgents: false, peerLabel: "CC5.1",
+  },
 ];
 
 const tasks: Task[] = [
@@ -222,7 +245,7 @@ const workers: WorkerTask[] = [
     prompt: "Write integration tests for the billing webhooks", cwd: "C:\\Dev\\billing-api",
     folder: "C:\\Dev\\billing-api\\.commander-tasks\\w1-billing-webhook-tests",
     status: "running", sessionId: "demo-worker-1", limitKind: null, freesAt: null, exitCode: null,
-    resultSummary: null, reassignedTo: null, createdAt: iso(now() - 40_000), endedAt: null,
+    resultSummary: null, reassignedTo: null, createdAt: iso(now() - 10_000), endedAt: null,
   },
   {
     id: 2, orchestratorInstanceId: 1, accountId: 3, accountName: "Spare", engine: "claude", model: "haiku",
@@ -242,7 +265,25 @@ const workers: WorkerTask[] = [
   },
 ];
 
-const demoPools: Pool[] = [];
+// A preseeded pool mid-flight: a mixed-engine crew on one goal, with a staged
+// work → review → work pipeline (the "Plan → Review → Implement" template).
+const demoPools: Pool[] = [
+  {
+    id: 1, name: "Dark-mode crew", cwd: "C:\\Dev\\acme-web",
+    goal: "Ship the dark-mode toggle end to end: UI, persistence, and docs.",
+    status: "running", createdAt: iso(now() - 22 * MIN),
+    members: [
+      { id: 11, poolId: 1, accountId: 1, accountName: "Main", engine: "claude", model: "fable", instanceId: null, status: "running", stuckSince: null },
+      { id: 12, poolId: 1, accountId: 5, accountName: "Gemini", engine: "gemini", model: "gemini-2.5-pro", instanceId: null, status: "running", stuckSince: null },
+      { id: 13, poolId: 1, accountId: 6, accountName: "Codex", engine: "codex", model: "gpt-5-codex", instanceId: null, status: "running", stuckSince: null },
+    ],
+    stages: [
+      { id: 21, poolId: 1, seq: 1, name: "Plan", kind: "work", memberId: 11, memberName: "Main", instructions: "Draft plan.md: tasks, owners, test strategy.", status: "done", attempts: 1 },
+      { id: 22, poolId: 1, seq: 2, name: "Plan review", kind: "review", memberId: 12, memberName: "Gemini", instructions: "Cross-question the plan; send it back until it holds up.", status: "done", attempts: 2 },
+      { id: 23, poolId: 1, seq: 3, name: "Implement", kind: "work", memberId: 13, memberName: "Codex", instructions: "Implement exactly per the approved plan.", status: "active", attempts: 0 },
+    ],
+  },
+];
 
 const handovers: HandoverRow[] = [
   {
@@ -256,10 +297,16 @@ const settings: Record<string, string> = {
   auto_failover: "1",
   auto_reassign: "0",
   auto_wake: "0",
+  auto_wake_workers: "0",
+  auto_warmup: "0",
+  warmup_on_start: "0",
+  auto_rewarm: "0",
   scan_interval_secs: "60",
   usage_tap: "1",
   claude_path: "",
   claude_path_resolved: "C:\\Users\\you\\AppData\\Roaming\\npm\\claude.cmd (demo — not launched)",
+  gemini_path_resolved: "C:\\Users\\you\\AppData\\Roaming\\npm\\gemini.cmd (demo — not launched)",
+  codex_path_resolved: "C:\\Users\\you\\AppData\\Roaming\\npm\\codex.cmd (demo — not launched)",
   extra_args_default: "",
   shared_project_memory: "1",
 };
@@ -302,7 +349,7 @@ function toUsage(a: DemoAccount): AccountUsage {
     name: a.name,
     configDir: a.configDir,
     email: a.email,
-    engine: "claude", // demo accounts are all claude
+    engine: a.engine,
     plan: a.plan,
     fiveHourBudget: a.fiveHourBudget,
     weeklyBudget: a.weeklyBudget,
@@ -373,17 +420,22 @@ const bannerSent = new Set<number>();
 const pendingPrompt = new Map<number, string | undefined>();
 
 function demoBanner(inst: Instance, initialPrompt?: string): string {
+  const realThing =
+    inst.kind === "gemini"
+      ? [" In the real app this is a live Gemini CLI session running", " right here in the grid."]
+      : inst.kind === "codex"
+        ? [" In the real app this is a live Codex CLI session running", " right here in the grid."]
+        : [" In the real app this is a live Claude Code session under", ` this account's ${A.dim}CLAUDE_CONFIG_DIR${A.reset}.`];
   const head = [
     "",
     `${A.accent}${A.bold} ✻ Claude Commander — demo terminal${A.reset}`,
     "",
-    ` ${A.dim}account${A.reset}  ${inst.accountName}`,
+    ` ${A.dim}account${A.reset}  ${inst.accountName}${inst.kind !== "claude" ? ` ${A.dim}(${inst.kind})${A.reset}` : ""}`,
     ` ${A.dim}folder ${A.reset}  ${inst.cwd}`,
     "",
-    ` ${A.bold}This pane is simulated.${A.reset} Nothing signs in, no ${A.dim}claude.exe${A.reset}`,
+    ` ${A.bold}This pane is simulated.${A.reset} Nothing signs in, nothing`,
     " is running, and nothing you type leaves this window.",
-    " In the real app this is a live Claude Code session under",
-    ` this account's ${A.dim}CLAUDE_CONFIG_DIR${A.reset}.`,
+    ...realThing,
     "",
   ];
   let body: string[];
@@ -476,7 +528,7 @@ function makeInstance(args: {
     accountName: acct?.name ?? "?",
     projectName: proj?.name ?? null,
     mode: args.mode ?? "new",
-    kind: args.kind === "shell" ? "shell" : "claude",
+    kind: args.kind === "shell" || args.kind === "gemini" || args.kind === "codex" ? args.kind : "claude",
     isOrchestrator: args.isOrchestrator ?? false,
     workerPool: args.workerPool ?? [],
     useOwnAgents: args.useOwnAgents ?? false,
@@ -578,7 +630,7 @@ export function makeDemoIpc(real: IpcApi): IpcApi {
     },
     addAccount: async (path, name) => {
       accounts.push({
-        id: nextId++, name, email: null, configDir: path, plan: "pro",
+        id: nextId++, name, email: null, configDir: path, engine: "claude", plan: "pro",
         fiveHourBudget: 400_000, weeklyBudget: 3_000_000, enabled: true, calibrated: false,
         fiveHourPct: 0, weeklyPct: 0, fiveHourResetMs: now() + 5 * HOUR, weeklyResetMs: now() + 7 * 24 * HOUR,
         live: false, limitHitUntilMs: null,
@@ -588,7 +640,7 @@ export function makeDemoIpc(real: IpcApi): IpcApi {
       const n = accounts.length + 1;
       const acct = {
         id: nextId++, name: name ?? `Account ${n}`, email: null,
-        configDir: `C:\\Users\\you\\.claude-accounts\\${n}`, plan: "pro",
+        configDir: `C:\\Users\\you\\.claude-accounts\\${n}`, engine: "claude", plan: "pro",
         fiveHourBudget: 400_000, weeklyBudget: 3_000_000, enabled: true, calibrated: false,
         fiveHourPct: 0, weeklyPct: 0, fiveHourResetMs: now() + 5 * HOUR, weeklyResetMs: now() + 7 * 24 * HOUR,
         live: false, limitHitUntilMs: null,
@@ -751,7 +803,7 @@ export function makeDemoIpc(real: IpcApi): IpcApi {
         orchestratorInstanceId: args.orchestratorInstanceId ?? null,
         accountId: args.accountId,
         accountName: acct?.name ?? "?",
-        engine: "claude",
+        engine: acct?.engine ?? "claude",
         model: args.model ?? null,
         prompt: args.prompt,
         cwd: args.cwd,
@@ -835,12 +887,35 @@ export function makeDemoIpc(real: IpcApi): IpcApi {
       inst.workerPool = args.workerPool;
       inst.useOwnAgents = args.useOwnAgents;
     },
-    // live activity capture only exists for real headless workers
-    workerActivityLog: async () => [],
+    // a fabricated live feed so the Workers tab's activity line has something to show
+    workerActivityLog: async () => {
+      const acts: WorkerActivity[] = [];
+      for (const w of workers) {
+        if (w.status !== "running") continue;
+        const t = new Date(w.createdAt).getTime();
+        acts.push(
+          { workerId: w.id, ts: iso(t), kind: "start", detail: `session started (${w.model ?? "account default"})` },
+          { workerId: w.id, ts: iso(t + 4_000), kind: "tool", detail: "Read(tests/webhooks.test.ts)" },
+          { workerId: w.id, ts: iso(t + 9_000), kind: "text", detail: "Covering the signature-mismatch case before wiring the retry path…" },
+        );
+      }
+      return acts;
+    },
 
     // engine accounts + pools — lightly simulated
-    addEngineAccount: async () => {
-      throw new Error("demo: Gemini/Codex accounts aren't simulated — install the app for the real thing");
+    addEngineAccount: async (engine, name) => {
+      const acct: DemoAccount = {
+        id: nextId++,
+        name: name ?? (engine === "gemini" ? "Gemini" : "Codex"),
+        email: null,
+        configDir: engine === "gemini" ? "C:\\Users\\you\\.gemini" : `C:\\Users\\you\\.codex-accounts\\${accounts.length}`,
+        engine, plan: "-",
+        fiveHourBudget: 0, weeklyBudget: 0, enabled: true, calibrated: false,
+        fiveHourPct: 0, weeklyPct: 0, fiveHourResetMs: now() + 5 * HOUR, weeklyResetMs: now() + 7 * 24 * HOUR,
+        live: false, limitHitUntilMs: null,
+      };
+      accounts.push(acct);
+      return { id: acct.id, name: acct.name, configDir: acct.configDir };
     },
     createPool: async (args) => {
       const p: Pool = {
@@ -858,7 +933,7 @@ export function makeDemoIpc(real: IpcApi): IpcApi {
             poolId: 0,
             accountId: m.accountId,
             accountName: a?.name ?? "?",
-            engine: "claude",
+            engine: a?.engine ?? "claude",
             model: m.model,
             instanceId: null,
             status: "idle",
